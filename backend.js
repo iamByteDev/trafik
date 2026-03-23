@@ -9,6 +9,7 @@ app.use(express.json());
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const PORT = Number(process.env.PORT || 3000);
 
 let routes = [];
 
@@ -157,6 +158,17 @@ const lineSequences = {
 };
 
 const apiLineCodes = { EAL_LMC: "EAL", EAL_RAC: "EAL", TKL_LHP: "TKL" };
+const apiStationCodes = { MEI: "MEF" };
+const lineTraversalBias = { EAL_LMC: 0.1, EAL_RAC: 0.25, TKL_LHP: 0.1 };
+const lineVariantsByOfficialLine = Object.keys(lineSequences).reduce(
+  (groups, line) => {
+    const officialLine = apiLineCodes[line] || line;
+    if (!groups[officialLine]) groups[officialLine] = [];
+    groups[officialLine].push(line);
+    return groups;
+  },
+  {},
+);
 
 // ==========================================
 // 2. GRAPH BUILDER & ROUTING LOGIC
@@ -181,109 +193,156 @@ function getDirection(line, from, to) {
   return seq.indexOf(to) > seq.indexOf(from) ? "UP" : "DOWN";
 }
 
-function findShortestPath(start, end) {
-  const distances = {};
-  const previous = {};
-  const queue = new Set(Object.keys(graph));
+function getOfficialLine(line) {
+  return apiLineCodes[line] || line;
+}
 
-  for (let node of queue) {
-    distances[node] = Infinity;
-    previous[node] = null;
-  }
-  distances[start] = 0;
+function getApiStationCode(station) {
+  return apiStationCodes[station] || station;
+}
+
+function getScheduleRequestInfo(line, station) {
+  const officialLine = getOfficialLine(line);
+  const apiStation = getApiStationCode(station);
+
+  return {
+    officialLine,
+    apiStation,
+    cacheKey: `${officialLine}-${apiStation}`,
+    stationKey: `${officialLine}-${apiStation}`,
+    url: `https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php?line=${officialLine}&sta=${apiStation}`,
+  };
+}
+
+function buildStateKey(node, line) {
+  return `${node}|${line || "START"}`;
+}
+
+function parseStateKey(key) {
+  const [node, rawLine] = key.split("|");
+  return { node, line: rawLine === "START" ? null : rawLine };
+}
+
+function findShortestPath(start, end) {
+  const startKey = buildStateKey(start, null);
+  const distances = new Map([[startKey, 0]]);
+  const previous = new Map();
+  const queue = new Set([startKey]);
+  let bestEndKey = null;
 
   while (queue.size > 0) {
-    let currNode = null;
+    let currentKey = null;
     let minDistance = Infinity;
-    for (let node of queue) {
-      if (distances[node] < minDistance) {
-        minDistance = distances[node];
-        currNode = node;
+
+    for (const key of queue) {
+      const distance = distances.get(key) ?? Infinity;
+      if (distance < minDistance) {
+        minDistance = distance;
+        currentKey = key;
       }
     }
-    if (currNode === null || currNode === end) break;
-    queue.delete(currNode);
 
-    for (let neighbor of graph[currNode] || []) {
-      let transferPenalty =
-        previous[currNode] && previous[currNode].line !== neighbor.line ? 5 : 0;
-      let alt = distances[currNode] + neighbor.weight + transferPenalty;
-      if (alt < distances[neighbor.node]) {
-        distances[neighbor.node] = alt;
-        previous[neighbor.node] = { node: currNode, line: neighbor.line };
+    if (!currentKey) break;
+    queue.delete(currentKey);
+
+    const { node: currentNode, line: currentLine } = parseStateKey(currentKey);
+    if (currentNode === end) {
+      bestEndKey = currentKey;
+      break;
+    }
+
+    for (const neighbor of graph[currentNode] || []) {
+      const nextKey = buildStateKey(neighbor.node, neighbor.line);
+      const transferPenalty =
+        currentLine && getOfficialLine(currentLine) !== getOfficialLine(neighbor.line)
+          ? 5
+          : 0;
+      const alt =
+        minDistance +
+        neighbor.weight +
+        transferPenalty +
+        (lineTraversalBias[neighbor.line] || 0);
+
+      if (alt < (distances.get(nextKey) ?? Infinity)) {
+        distances.set(nextKey, alt);
+        previous.set(nextKey, {
+          key: currentKey,
+          edge: {
+            from: currentNode,
+            to: neighbor.node,
+            line: neighbor.line,
+            weight: neighbor.weight,
+          },
+        });
+        queue.add(nextKey);
       }
     }
   }
 
+  if (!bestEndKey) return [];
+
   const path = [];
-  let current = end;
-  while (current) {
-    path.unshift(current);
-    current = previous[current] ? previous[current].node : null;
+  let currentKey = bestEndKey;
+  while (previous.has(currentKey)) {
+    const { key, edge } = previous.get(currentKey);
+    path.unshift(edge);
+    currentKey = key;
   }
   return path;
 }
 
 function generateItinerary(start, end) {
   const path = findShortestPath(start, end);
-  if (path.length < 2) return [];
+  if (path.length === 0) return [];
 
   const legs = [];
-  let currentLine = null;
-  let legStart = path[0];
-  let commuteTime = 0;
+  let segmentStart = 0;
 
-  for (let i = 0; i < path.length - 1; i++) {
-    const from = path[i];
-    const to = path[i + 1];
-    const edge = graph[from].find((e) => e.node === to);
+  while (segmentStart < path.length) {
+    const currentOfficialLine = getOfficialLine(path[segmentStart].line);
+    let segmentEnd = segmentStart;
+    let commuteTime = 0;
 
-    if (currentLine === null) {
-      currentLine = edge.line;
-      legs.push({
-        type: "WAITING",
-        line: currentLine,
-        station: legStart,
-        direction: getDirection(currentLine, from, to),
-        targetTime: null,
-      });
+    while (
+      segmentEnd < path.length &&
+      getOfficialLine(path[segmentEnd].line) === currentOfficialLine
+    ) {
+      commuteTime += path[segmentEnd].weight;
+      segmentEnd++;
     }
 
-    if (edge.line !== currentLine) {
-      legs.push({
-        type: "COMMUTING",
-        line: currentLine,
-        start: legStart,
-        end: from,
-        duration: commuteTime,
-      });
+    const firstEdge = path[segmentStart];
+    const lastEdge = path[segmentEnd - 1];
+    const rideLine = lastEdge.line;
+
+    legs.push({
+      type: "WAITING",
+      line: rideLine,
+      station: firstEdge.from,
+      direction: getDirection(rideLine, firstEdge.from, firstEdge.to),
+      destinationStation: lastEdge.to,
+      targetTime: null,
+    });
+    legs.push({
+      type: "COMMUTING",
+      line: rideLine,
+      start: firstEdge.from,
+      end: lastEdge.to,
+      duration: commuteTime,
+    });
+
+    if (segmentEnd < path.length) {
       legs.push({
         type: "TRANSFERRING",
-        station: from,
-        toLine: edge.line,
+        station: lastEdge.to,
+        toLine: path[segmentEnd].line,
         duration: 4,
       });
-      legs.push({
-        type: "WAITING",
-        line: edge.line,
-        station: from,
-        direction: getDirection(edge.line, from, to),
-        targetTime: null,
-      });
-
-      currentLine = edge.line;
-      legStart = from;
-      commuteTime = 0;
     }
-    commuteTime += edge.weight;
+
+    segmentStart = segmentEnd;
   }
-  legs.push({
-    type: "COMMUTING",
-    line: currentLine,
-    start: legStart,
-    end: path[path.length - 1],
-    duration: commuteTime,
-  });
+
   return legs;
 }
 
@@ -292,29 +351,262 @@ function generateItinerary(start, end) {
 // ==========================================
 const apiCache = new Map();
 
-async function fetchExactETA(line, station, direction) {
-  const officialLine = apiLineCodes[line] || line;
-  const cacheKey = `${officialLine}-${station}-${direction}`;
+function logEta(level, message, context = {}) {
+  const details = Object.entries(context)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => `${key}=${value}`)
+    .join(" ");
 
-  if (apiCache.has(cacheKey) && apiCache.get(cacheKey).expires > Date.now()) {
-    return apiCache.get(cacheKey).time;
+  console[level](`[MTR ETA] ${message}${details ? ` ${details}` : ""}`);
+}
+
+function trainServesDestination(
+  routeLine,
+  station,
+  direction,
+  destinationStation,
+  trainDestination,
+) {
+  if (!destinationStation || !trainDestination) return true;
+
+  const officialLine = apiLineCodes[routeLine] || routeLine;
+  const candidateLines = lineVariantsByOfficialLine[officialLine] || [routeLine];
+
+  return candidateLines.some((line) => {
+    const sequence = lineSequences[line];
+    if (!sequence) return false;
+
+    const stationIndex = sequence.indexOf(station);
+    const targetIndex = sequence.indexOf(destinationStation);
+    const trainDestinationIndex = sequence.indexOf(trainDestination);
+
+    if (
+      stationIndex === -1 ||
+      targetIndex === -1 ||
+      trainDestinationIndex === -1
+    ) {
+      return false;
+    }
+
+    if (direction === "UP") {
+      return stationIndex < targetIndex && targetIndex <= trainDestinationIndex;
+    }
+
+    return stationIndex > targetIndex && targetIndex >= trainDestinationIndex;
+  });
+}
+
+async function fetchStationScheduleDetails(line, station, options = {}) {
+  const { bypassCache = false } = options;
+  const { officialLine, apiStation, cacheKey, stationKey, url } =
+    getScheduleRequestInfo(line, station);
+
+  if (!bypassCache && apiCache.has(cacheKey) && apiCache.get(cacheKey).expires > Date.now()) {
+    const cached = apiCache.get(cacheKey);
+    return {
+      trainData: cached.trainData,
+      metadata: {
+        cached: true,
+        httpStatus: 200,
+        apiStatus: cached.apiStatus,
+        resultCode: cached.resultCode,
+        message: cached.message,
+        officialLine,
+        apiStation,
+        stationKey,
+        url,
+      },
+    };
   }
 
   try {
-    const url = `https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php?line=${officialLine}&sta=${station}`;
     const res = await fetch(url);
-    const data = await res.json();
-    const trainData = data?.data?.[`${officialLine}-${station}`];
-
-    if (trainData && trainData[direction] && trainData[direction].length > 0) {
-      const timeStr = trainData[direction][0].time.replace(" ", "T") + "+08:00";
-      const epoch = new Date(timeStr).getTime();
-      apiCache.set(cacheKey, { time: epoch, expires: Date.now() + 8000 });
-      return epoch;
+    if (!res.ok) {
+      logEta("error", "HTTP error from MTR schedule API", {
+        httpStatus: res.status,
+        line,
+        officialLine,
+        station,
+        apiStation,
+        url,
+      });
+      return {
+        trainData: null,
+        metadata: {
+          cached: false,
+          httpStatus: res.status,
+          apiStatus: null,
+          resultCode: null,
+          message: `HTTP ${res.status}`,
+          officialLine,
+          apiStation,
+          stationKey,
+          url,
+        },
+      };
     }
+
+    const data = await res.json();
+    if (data?.status !== 1) {
+      logEta("warn", "MTR schedule API returned no usable data", {
+        httpStatus: res.status,
+        apiStatus: data?.status,
+        resultCode: data?.resultCode,
+        message: data?.message,
+        line,
+        officialLine,
+        station,
+        apiStation,
+        url,
+      });
+    }
+
+    const trainData = data?.data?.[stationKey] || null;
+    if (!trainData) {
+      logEta("warn", "MTR schedule payload missing station entry", {
+        httpStatus: res.status,
+        apiStatus: data?.status,
+        resultCode: data?.resultCode,
+        message: data?.message,
+        line,
+        officialLine,
+        station,
+        apiStation,
+        stationKey,
+      });
+    }
+    apiCache.set(cacheKey, {
+      trainData,
+      apiStatus: data?.status ?? null,
+      resultCode: data?.resultCode ?? null,
+      message: data?.message ?? null,
+      expires: Date.now() + 8000,
+    });
+    return {
+      trainData,
+      metadata: {
+        cached: false,
+        httpStatus: res.status,
+        apiStatus: data?.status ?? null,
+        resultCode: data?.resultCode ?? null,
+        message: data?.message ?? null,
+        officialLine,
+        apiStation,
+        stationKey,
+        url,
+      },
+    };
   } catch (e) {
-    console.error(`ETA Error [${officialLine} ${station}]:`, e.message);
+    logEta("error", "Failed to fetch MTR schedule API", {
+      line,
+      officialLine,
+      station,
+      apiStation,
+      url,
+      error: e.message,
+    });
+    return {
+      trainData: null,
+      metadata: {
+        cached: false,
+        httpStatus: null,
+        apiStatus: null,
+        resultCode: null,
+        message: e.message,
+        officialLine,
+        apiStation,
+        stationKey,
+        url,
+      },
+    };
   }
+}
+
+async function fetchStationSchedule(line, station) {
+  const { trainData } = await fetchStationScheduleDetails(line, station);
+  return trainData;
+}
+
+async function fetchExactETA(line, station, direction, destinationStation) {
+  const trainData = await fetchStationSchedule(line, station);
+
+  if (!trainData) {
+    logEta("warn", "No schedule returned for ETA lookup", {
+      line,
+      station,
+      direction,
+      destinationStation,
+    });
+    return null;
+  }
+
+  if (!Array.isArray(trainData[direction]) || trainData[direction].length === 0) {
+    logEta("warn", "No trains for requested direction", {
+      line,
+      station,
+      direction,
+      destinationStation,
+      availableKeys: Object.keys(trainData).join(","),
+    });
+    return null;
+  }
+
+  if (trainData && Array.isArray(trainData[direction])) {
+    const matchingTrain = trainData[direction].find((train) =>
+      trainServesDestination(
+        line,
+        station,
+        direction,
+        destinationStation,
+        train.dest,
+      ),
+    );
+
+    const selectedTrain = destinationStation
+      ? matchingTrain
+      : matchingTrain || trainData[direction][0];
+
+    if (!selectedTrain) {
+      logEta("warn", "No matching train found for requested destination", {
+        line,
+        station,
+        direction,
+        destinationStation,
+        candidateDestinations: trainData[direction]
+          .map((train) => train.dest)
+          .filter(Boolean)
+          .join(","),
+      });
+      return null;
+    }
+
+    if (!matchingTrain && destinationStation) {
+      logEta("warn", "Filtered out all trains for branch destination", {
+        line,
+        station,
+        direction,
+        destinationStation,
+        candidateDestinations: trainData[direction]
+          .map((train) => train.dest)
+          .filter(Boolean)
+          .join(","),
+      });
+    }
+
+    if (selectedTrain?.time) {
+      const timeStr = selectedTrain.time.replace(" ", "T") + "+08:00";
+      return new Date(timeStr).getTime();
+    }
+
+    logEta("warn", "Selected train missing ETA time", {
+      line,
+      station,
+      direction,
+      destinationStation,
+      selectedDestination: selectedTrain?.dest,
+    });
+  }
+
   return null;
 }
 
@@ -329,6 +621,7 @@ setInterval(async () => {
         leg.line,
         leg.station,
         leg.direction,
+        leg.destinationStation,
       );
       if (liveEpoch && liveEpoch !== leg.targetTime) {
         leg.targetTime = liveEpoch;
@@ -360,7 +653,17 @@ app.post("/api/routes", async (req, res) => {
       legs[0].line,
       legs[0].station,
       legs[0].direction,
+      legs[0].destinationStation,
     );
+    if (!liveEpoch) {
+      logEta("warn", "Falling back to synthetic 3 minute ETA", {
+        routeName: name,
+        line: legs[0].line,
+        station: legs[0].station,
+        direction: legs[0].direction,
+        destinationStation: legs[0].destinationStation,
+      });
+    }
     legs[0].targetTime = liveEpoch || Date.now() + 180000;
   }
 
@@ -386,12 +689,22 @@ app.post("/api/routes/:id/advance", async (req, res) => {
   } else {
     const nextLeg = route.legs[route.currentLegIndex];
     if (nextLeg.type === "WAITING") {
-      nextLeg.targetTime =
-        (await fetchExactETA(
-          nextLeg.line,
-          nextLeg.station,
-          nextLeg.direction,
-        )) || Date.now() + 180000;
+      const liveEpoch = await fetchExactETA(
+        nextLeg.line,
+        nextLeg.station,
+        nextLeg.direction,
+        nextLeg.destinationStation,
+      );
+      if (!liveEpoch) {
+        logEta("warn", "Advance route used fallback ETA", {
+          routeId: route.id,
+          line: nextLeg.line,
+          station: nextLeg.station,
+          direction: nextLeg.direction,
+          destinationStation: nextLeg.destinationStation,
+        });
+      }
+      nextLeg.targetTime = liveEpoch || Date.now() + 180000;
     } else {
       nextLeg.targetTime = Date.now() + nextLeg.duration * 60000;
     }
@@ -408,4 +721,88 @@ app.delete("/api/routes/:id", (req, res) => {
 
 app.get("/api/routes", (req, res) => res.json(routes));
 
-server.listen(3000, () => console.log("Routing Backend running on port 3000"));
+app.get("/api/debug/station-code/:station", (req, res) => {
+  const station = req.params.station.toUpperCase();
+  res.json({
+    station,
+    apiStation: getApiStationCode(station),
+  });
+});
+
+app.get("/api/debug/eta", async (req, res) => {
+  const line = String(req.query.line || "").toUpperCase();
+  const station = String(req.query.station || "").toUpperCase();
+  const direction = String(req.query.direction || "").toUpperCase();
+  const destinationStation = req.query.destinationStation
+    ? String(req.query.destinationStation).toUpperCase()
+    : null;
+
+  if (!line || !station) {
+    return res.status(400).json({
+      error: "Provide line and station query params.",
+    });
+  }
+
+  const { trainData, metadata } = await fetchStationScheduleDetails(line, station, {
+    bypassCache: req.query.fresh === "1",
+  });
+
+  const trains = direction && Array.isArray(trainData?.[direction])
+    ? trainData[direction]
+    : [];
+  const selectedTrain = trains.find((train) =>
+    trainServesDestination(
+      line,
+      station,
+      direction,
+      destinationStation,
+      train.dest,
+    ),
+  );
+
+  res.json({
+    request: {
+      line,
+      station,
+      direction,
+      destinationStation,
+    },
+    metadata,
+    availableKeys: trainData ? Object.keys(trainData) : [],
+    candidateDestinations: trains.map((train) => train.dest).filter(Boolean),
+    selectedTrain,
+    etaEpoch: selectedTrain?.time
+      ? new Date(selectedTrain.time.replace(" ", "T") + "+08:00").getTime()
+      : null,
+    trainData,
+  });
+});
+
+function handleStartupError(error) {
+  if (error.code === "EADDRINUSE") {
+    console.error(
+      `[Startup] Port ${PORT} is already in use. Run with a different port, e.g. PORT=3001 bun run backend.js`,
+    );
+    process.exit(1);
+  }
+
+  console.error("[Startup] Server failed to start:", error);
+  process.exit(1);
+}
+
+server.on("error", handleStartupError);
+wss.on("error", handleStartupError);
+
+process.on("uncaughtException", (error) => {
+  if (error?.code === "EADDRINUSE") {
+    handleStartupError(error);
+    return;
+  }
+
+  console.error("[Fatal] Uncaught exception:", error);
+  process.exit(1);
+});
+
+server.listen(PORT, () =>
+  console.log(`Routing Backend running on port ${PORT}`),
+);

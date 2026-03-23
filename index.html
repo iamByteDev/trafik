@@ -291,10 +291,40 @@
         await fetch(`${API_BASE}/${id}`, { method: "DELETE" });
       };
 
+      function formatRouteTime(totalMinutes) {
+        if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return "<1m";
+        const roundedMinutes = Math.ceil(totalMinutes);
+        const hours = Math.floor(roundedMinutes / 60);
+        const minutes = roundedMinutes % 60;
+
+        if (!hours) return `~${minutes}m`;
+        if (!minutes) return `~${hours}h`;
+        return `~${hours}h ${minutes}m`;
+      }
+
+      function estimateRemainingMinutes(item) {
+        const now = Date.now();
+
+        return item.legs.reduce((total, leg, index) => {
+          if (index < item.currentLegIndex) return total;
+
+          if (leg.type === "WAITING") {
+            if (index === item.currentLegIndex && leg.targetTime) {
+              return total + Math.max(0, leg.targetTime - now) / 60000;
+            }
+            return total + 3;
+          }
+
+          return total + (leg.duration || 0);
+        }, 0);
+      }
+
       function renderUI() {
         document.getElementById("cards-layer").innerHTML = routes
           .map((item) => {
             if (item.status === "COMPLETED") return "";
+
+            const totalRemaining = formatRouteTime(estimateRemainingMinutes(item));
 
             const legsHtml = item.legs
               .map((leg, i) => {
@@ -315,11 +345,11 @@
 
                 if (leg.type === "WAITING") {
                   title = `Wait for ${lName}`;
-                  subtitle = `At ${mtrStations[leg.station]} (${leg.direction})`;
+                  subtitle = `At ${mtrStations[leg.station]} (To ${mtrStations[leg.destinationStation]})`;
                   badgeStyle = isActive ? "bg-amber-600" : "bg-neutral-700";
                 } else if (leg.type === "COMMUTING") {
                   title = `Ride ${lName}`;
-                  subtitle = `${mtrStations[leg.start]} ➡️ ${mtrStations[leg.end]}`;
+                  subtitle = `Towards ${mtrStations[leg.end]}`;
                   badgeStyle = isActive ? "bg-blue-600" : "bg-neutral-700";
                 } else if (leg.type === "TRANSFERRING") {
                   title = `Transfer to ${toName}`;
@@ -355,11 +385,14 @@
             return `
           <div class="w-full max-w-3xl bg-neutral-950 border border-neutral-800 rounded-2xl p-6 flex flex-col gap-5 relative">
              <div class="flex justify-between items-center border-b border-neutral-800 pb-4">
-                <div class="text-xl font-black">${item.name}</div>
-                <button onclick="deleteRoute('${item.id}')" class="text-neutral-500 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
-             </div>
-             <div class="flex flex-col gap-3">${legsHtml}</div>
-          </div>
+                 <div class="text-xl font-black">${item.name}</div>
+                 <div class="flex items-center gap-3">
+                    <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">ETA ${totalRemaining}</div>
+                    <button onclick="deleteRoute('${item.id}')" class="text-neutral-500 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                 </div>
+              </div>
+              <div class="flex flex-col gap-3">${legsHtml}</div>
+           </div>
         `;
           })
           .join("");
