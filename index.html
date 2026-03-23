@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>TRAFIK Tracker Live</title>
+    <title>TRAFIK - Commute With Style</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
@@ -324,7 +324,9 @@
           .map((item) => {
             if (item.status === "COMPLETED") return "";
 
-            const totalRemaining = formatRouteTime(estimateRemainingMinutes(item));
+            const totalRemaining = formatRouteTime(
+              estimateRemainingMinutes(item),
+            );
 
             const legsHtml = item.legs
               .map((leg, i) => {
