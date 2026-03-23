@@ -1,3 +1,8 @@
-providers = ["node"]
 [phases.setup]
-nixPkgs = ["...", "nodejs", "npm"]
+nixPkgs = ["nodejs"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[start]
+cmd = "PORT=3001 node backend.js"
