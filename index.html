@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRAFIK Tracker Live</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+      ::-webkit-scrollbar {
+        display: none;
+      }
+    </style>
+  </head>
+  <body
+    class="bg-black text-white font-sans h-screen flex flex-col overflow-hidden relative"
+    onclick="closeAllDropdowns()"
+  >
+    <header
+      class="shrink-0 px-6 py-4 border-b border-neutral-900 flex justify-between items-center z-10 bg-black/80 backdrop-blur-md"
+    >
+      <div class="flex items-center gap-2">
+        <div
+          class="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]"
+        ></div>
+        <h1 class="text-2xl font-black tracking-widest text-white">TRAFIK</h1>
+      </div>
+    </header>
+
+    <main class="flex-1 min-h-0 relative overflow-hidden flex flex-col p-4">
+      <div
+        id="cards-layer"
+        class="flex-1 overflow-y-auto flex flex-col gap-6 items-center pt-4 pb-20 w-full"
+      ></div>
+    </main>
+
+    <div
+      class="shrink-0 bg-neutral-950 border-t border-neutral-900 flex flex-col z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] p-4"
+    >
+      <form
+        id="add-form"
+        class="flex flex-wrap gap-2 items-center max-w-3xl mx-auto w-full"
+      >
+        <div class="flex gap-2 flex-1 relative">
+          <div class="relative flex-1" onclick="event.stopPropagation()">
+            <input
+              type="text"
+              id="start-search"
+              onfocus="openDropdown('start')"
+              oninput="filterStations('start')"
+              placeholder="Start Station"
+              class="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-white"
+              autocomplete="off"
+            />
+            <input type="hidden" id="start-code" />
+            <div
+              id="start-dropdown"
+              class="absolute hidden bottom-full mb-1 left-0 w-full bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50"
+            ></div>
+          </div>
+          <span class="text-neutral-500 mt-2"
+            ><i data-lucide="arrow-right" class="w-4 h-4"></i
+          ></span>
+          <div class="relative flex-1" onclick="event.stopPropagation()">
+            <input
+              type="text"
+              id="end-search"
+              onfocus="openDropdown('end')"
+              oninput="filterStations('end')"
+              placeholder="Destination Station"
+              class="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-white"
+              autocomplete="off"
+            />
+            <input type="hidden" id="end-code" />
+            <div
+              id="end-dropdown"
+              class="absolute hidden bottom-full mb-1 left-0 w-full bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50"
+            ></div>
+          </div>
+        </div>
+        <button
+          type="submit"
+          class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold shrink-0"
+        >
+          CALCULATE ROUTING
+        </button>
+      </form>
+    </div>
+
+    <script>
+      const mtrStations = {
+        KET: "Kennedy Town",
+        HKU: "HKU",
+        SYP: "Sai Ying Pun",
+        SHW: "Sheung Wan",
+        CEN: "Central",
+        ADM: "Admiralty",
+        WAC: "Wan Chai",
+        CAB: "Causeway Bay",
+        TIN: "Tin Hau",
+        FOH: "Fortress Hill",
+        NOP: "North Point",
+        QUO: "Quarry Bay",
+        TAK: "Tai Koo",
+        SWH: "Sai Wan Ho",
+        SKW: "Shau Kei Wan",
+        CHW: "Chai Wan",
+        TST: "Tsim Sha Tsui",
+        JOR: "Jordan",
+        YMT: "Yau Ma Tei",
+        MOK: "Mong Kok",
+        PRE: "Prince Edward",
+        SSP: "Sham Shui Po",
+        CSW: "Cheung Sha Wan",
+        LCK: "Lai Chi Kok",
+        MEI: "Mei Foo",
+        LAK: "Lai King",
+        KWF: "Kwai Fong",
+        KWH: "Kwai Hing",
+        TWH: "Tai Wo Hau",
+        TSW: "Tsuen Wan",
+        WHA: "Whampoa",
+        HOM: "Ho Man Tin",
+        SKM: "Shek Kip Mei",
+        KOT: "Kowloon Tong",
+        LOF: "Lok Fu",
+        WTS: "Wong Tai Sin",
+        DIH: "Diamond Hill",
+        CHH: "Choi Hung",
+        KOB: "Kowloon Bay",
+        NTK: "Ngau Tau Kok",
+        KWT: "Kwun Tong",
+        LAT: "Lam Tin",
+        YAT: "Yau Tong",
+        TIK: "Tiu Keng Leng",
+        EXH: "Exhibition Centre",
+        HUH: "Hung Hom",
+        MKK: "Mong Kok East",
+        TAW: "Tai Wai",
+        SHT: "Sha Tin",
+        FOT: "Fo Tan",
+        RAC: "Racecourse",
+        UNI: "University",
+        TAP: "Tai Po Market",
+        TWO: "Tai Wo",
+        FAN: "Fanling",
+        SHS: "Sheung Shui",
+        LOW: "Lo Wu",
+        LMC: "Lok Ma Chau",
+        WKS: "Wu Kai Sha",
+        MOS: "Ma On Shan",
+        HEO: "Heng On",
+        TSH: "Tai Shui Hang",
+        SHM: "Shek Mun",
+        CIO: "City One",
+        STW: "Sha Tin Wai",
+        CKT: "Che Kung Temple",
+        HIK: "Hin Keng",
+        KAK: "Kai Tak",
+        SUW: "Sung Wong Toi",
+        TKW: "To Kwa Wan",
+        ETS: "East Tsim Sha Tsui",
+        AUS: "Austin",
+        NAC: "Nam Cheong",
+        TWC: "Tsuen Wan West",
+        TWW: "Kam Sheung Road",
+        KSR: "Yuen Long",
+        YUL: "Long Ping",
+        LOP: "Tin Shui Wai",
+        TIS: "Siu Hong",
+        TUM: "Tuen Mun",
+        OCP: "Ocean Park",
+        WCH: "Wong Chuk Hang",
+        LET: "Lei Tung",
+        SOH: "South Horizons",
+        HOK: "Hong Kong",
+        KOW: "Kowloon",
+        OLY: "Olympic",
+        TSY: "Tsing Yi",
+        SUN: "Sunny Bay",
+        TUC: "Tung Chung",
+        AIR: "Airport",
+        AWE: "AsiaWorld-Expo",
+        TKO: "Tseung Kwan O",
+        HAH: "Hang Hau",
+        POA: "Po Lam",
+        LHP: "LOHAS Park",
+        DIS: "Disneyland Resort",
+      };
+
+      const lineNames = {
+        TWL: "Tsuen Wan Line",
+        ISL: "Island Line",
+        KTL: "Kwun Tong Line",
+        EAL: "East Rail Line",
+        EAL_LMC: "East Rail (Lok Ma Chau)",
+        EAL_RAC: "East Rail (Racecourse)",
+        TML: "Tuen Ma Line",
+        SIL: "South Island Line",
+        TCL: "Tung Chung Line",
+        AEL: "Airport Express",
+        TKL: "Tseung Kwan O Line",
+        TKL_LHP: "Tseung Kwan O (LOHAS)",
+        DRL: "Disneyland Resort Line",
+      };
+
+      const mtrList = Object.keys(mtrStations).map((code) => ({
+        code,
+        name: mtrStations[code],
+      }));
+
+      function openDropdown(type) {
+        document.getElementById(`${type}-dropdown`).classList.remove("hidden");
+        filterStations(type);
+      }
+      function closeAllDropdowns() {
+        document.getElementById("start-dropdown").classList.add("hidden");
+        document.getElementById("end-dropdown").classList.add("hidden");
+      }
+
+      function filterStations(type) {
+        const searchTerm = document
+          .getElementById(`${type}-search`)
+          .value.toLowerCase();
+        const dropdown = document.getElementById(`${type}-dropdown`);
+        let html = "";
+        let count = 0;
+        for (let i = 0; i < mtrList.length; i++) {
+          if (mtrList[i].name.toLowerCase().includes(searchTerm)) {
+            html += `<div class="px-3 py-2 text-sm hover:bg-neutral-700 cursor-pointer" onclick="selectStation('${type}', '${mtrList[i].code}', '${mtrList[i].name}')">${mtrList[i].name}</div>`;
+            count++;
+          }
+        }
+        dropdown.innerHTML =
+          count > 0
+            ? html
+            : `<div class="px-3 py-2 text-sm text-neutral-500 italic">No matches...</div>`;
+      }
+
+      function selectStation(type, code, name) {
+        document.getElementById(`${type}-search`).value = name;
+        document.getElementById(`${type}-code`).value = code;
+        closeAllDropdowns();
+      }
+
+      const API_BASE = "http://localhost:3000/api/routes";
+      let routes = [];
+
+      async function init() {
+        try {
+          const res = await fetch(API_BASE);
+          routes = await res.json();
+          renderUI();
+        } catch (err) {}
+        const ws = new WebSocket("ws://localhost:3000");
+        ws.onmessage = (event) => {
+          const { type, data } = JSON.parse(event.data);
+          if (type === "new_route") routes.push(data);
+          if (type === "routes_updated") routes = data;
+          if (type === "route_deleted")
+            routes = routes.filter((r) => r.id !== data);
+          renderUI();
+        };
+      }
+
+      document
+        .getElementById("add-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const startCode = document.getElementById("start-code").value;
+          const endCode = document.getElementById("end-code").value;
+          if (!startCode || !endCode)
+            return alert("Select valid MTR stations.");
+          await fetch(API_BASE, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: `${mtrStations[startCode]} ➡️ ${mtrStations[endCode]}`,
+              startCode,
+              endCode,
+            }),
+          });
+          document.getElementById("start-search").value = "";
+          document.getElementById("end-search").value = "";
+        });
+
+      window.advanceRoute = async (id) => {
+        await fetch(`${API_BASE}/${id}/advance`, { method: "POST" });
+      };
+      window.deleteRoute = async (id) => {
+        await fetch(`${API_BASE}/${id}`, { method: "DELETE" });
+      };
+
+      function renderUI() {
+        document.getElementById("cards-layer").innerHTML = routes
+          .map((item) => {
+            if (item.status === "COMPLETED") return "";
+
+            const legsHtml = item.legs
+              .map((leg, i) => {
+                const isActive = i === item.currentLegIndex;
+                const isPast = i < item.currentLegIndex;
+
+                let title = "";
+                let subtitle = "";
+                let bgStyle = isPast
+                  ? "bg-neutral-900 opacity-50"
+                  : isActive
+                    ? "bg-neutral-800 border-neutral-600 shadow-lg"
+                    : "bg-neutral-950 opacity-80";
+                let badgeStyle = isActive ? "text-white" : "text-neutral-400";
+
+                const lName = lineNames[leg.line];
+                const toName = lineNames[leg.toLine];
+
+                if (leg.type === "WAITING") {
+                  title = `Wait for ${lName}`;
+                  subtitle = `At ${mtrStations[leg.station]} (${leg.direction})`;
+                  badgeStyle = isActive ? "bg-amber-600" : "bg-neutral-700";
+                } else if (leg.type === "COMMUTING") {
+                  title = `Ride ${lName}`;
+                  subtitle = `${mtrStations[leg.start]} ➡️ ${mtrStations[leg.end]}`;
+                  badgeStyle = isActive ? "bg-blue-600" : "bg-neutral-700";
+                } else if (leg.type === "TRANSFERRING") {
+                  title = `Transfer to ${toName}`;
+                  subtitle = `Walk at ${mtrStations[leg.station]}`;
+                  badgeStyle = isActive ? "bg-purple-600" : "bg-neutral-700";
+                }
+
+                let rightPanelHtml = "";
+                if (isActive) {
+                  rightPanelHtml = `
+                <div class="flex flex-col items-end gap-2">
+                   <div class="time-display text-3xl font-black tracking-tighter" data-target="${leg.targetTime}" data-phase="${leg.type}">--:--</div>
+                   <button onclick="advanceRoute('${item.id}')" class="bg-white text-black px-3 py-1 rounded text-xs font-bold hover:bg-neutral-300 uppercase">Next Step</button>
+                </div>`;
+                } else if (isPast) {
+                  rightPanelHtml = `<div class="text-neutral-600"><i data-lucide="check-circle-2" class="w-6 h-6"></i></div>`;
+                } else {
+                  rightPanelHtml = `<div class="text-neutral-600 font-mono text-sm">${leg.duration ? "~" + leg.duration + "m" : "LIVE"}</div>`;
+                }
+
+                return `
+            <div class="flex items-center p-4 rounded-xl border border-neutral-800 ${bgStyle} transition-all w-full">
+               <div class="flex flex-col gap-1 flex-1">
+                  <div class="flex items-center gap-2"><span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded text-white ${badgeStyle}">${leg.type}</span><span class="font-bold text-sm ${isActive ? "text-white" : "text-neutral-400"}">${title}</span></div>
+                  <div class="text-xs font-medium text-neutral-500 uppercase tracking-wide">${subtitle}</div>
+               </div>
+               ${rightPanelHtml}
+            </div>
+          `;
+              })
+              .join("");
+
+            return `
+          <div class="w-full max-w-3xl bg-neutral-950 border border-neutral-800 rounded-2xl p-6 flex flex-col gap-5 relative">
+             <div class="flex justify-between items-center border-b border-neutral-800 pb-4">
+                <div class="text-xl font-black">${item.name}</div>
+                <button onclick="deleteRoute('${item.id}')" class="text-neutral-500 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+             </div>
+             <div class="flex flex-col gap-3">${legsHtml}</div>
+          </div>
+        `;
+          })
+          .join("");
+        lucide.createIcons();
+      }
+
+      function updateLoop() {
+        const now = Date.now();
+        document.querySelectorAll(".time-display").forEach((el) => {
+          const target = parseInt(el.getAttribute("data-target"));
+          const phase = el.getAttribute("data-phase");
+          if (!target) return;
+
+          const remainingMs = Math.max(0, target - now);
+          const mins = Math.floor(remainingMs / 60000);
+          const secs = Math.floor((remainingMs % 60000) / 1000);
+
+          if (remainingMs === 0 && phase === "WAITING") {
+            el.innerHTML = `<span class="text-amber-500 text-xl animate-pulse">ARRIVING</span>`;
+          } else if (remainingMs === 0) {
+            el.innerHTML = `<span class="text-green-500 text-xl animate-pulse">DONE</span>`;
+          } else {
+            el.innerText = `${mins}m ${secs.toString().padStart(2, "0")}s`;
+          }
+        });
+        requestAnimationFrame(updateLoop);
+      }
+
+      init();
+      requestAnimationFrame(updateLoop);
+    </script>
+  </body>
+</html>
