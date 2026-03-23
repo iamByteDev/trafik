@@ -1,6 +1,9 @@
 {
   "name": "travik",
   "private": true,
+  "scripts": {
+    "start": "bun backend.js"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
