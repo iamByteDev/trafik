@@ -5,4 +5,4 @@ nixPkgs = ["nodejs"]
 cmds = ["npm install"]
 
 [start]
-cmd = "PORT=3001 node backend.js"
+cmd = "node backend.js"

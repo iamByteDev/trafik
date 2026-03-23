@@ -1,7 +1,9 @@
 FROM node:20-slim
 WORKDIR /app
+# Copy both package files to install dependencies first
 COPY package*.json ./
 RUN npm install
+# Copy the rest of your files (backend.js, etc.)
 COPY . .
 EXPOSE 3001
-CMD ["sh", "-c", "PORT=3001 node backend.js"]
+CMD ["node", "backend.js"]
