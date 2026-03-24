@@ -18,4 +18,4 @@ TRAFIK Tracker is a real-time, WebSocket-driven transit itinerary application de
 
 - `POST /api/routes`: Submits `{ startCode, endCode }`. Returns a fully generated, multi-leg journey with exact train timestamps.
 - `POST /api/routes/:id/advance`: Moves the user from "Waiting" to "Commuting", or "Commuting" to "Transferring".
-- **WebSocket (`ws://localhost:3000`)**: Broadcasts `new_route`, `route_deleted`, and `route_updated` (which fires every time the background API poll detects a change in the live train schedule).
+- **WebSocket (`ws://trafiktrack.duckdns.org`)**: Broadcasts `new_route`, `route_deleted`, and `route_updated` (which fires every time the background API poll detects a change in the live train schedule).
