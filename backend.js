@@ -21,7 +21,7 @@ app.get("/", (req, res) => {
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
-const PORT = Number(process.env.PORT || 3000);
+const PORT = Number(process.env.PORT || 3001);
 
 let routes = [];
 
@@ -713,7 +713,7 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 
-// Start listening on all interfaces (0.0.0.0 is best for Docker/Coolify)
-server.listen(PORT, "0.0.0.0", () =>
-  console.log(`Routing Backend running on port ${PORT}`),
-);
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Routing Backend running on port ${PORT} and listening on 0.0.0.0`);
+});
