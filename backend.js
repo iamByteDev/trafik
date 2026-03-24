@@ -2,7 +2,7 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const cors = require("cors");
-const path = require("path"); // Added path module
+const path = require("path");
 
 const app = express();
 app.use(cors());
@@ -19,9 +19,12 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(process.cwd(), "index.html"));
 });
 
+// Create the master HTTP server and bind WebSockets to it
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
-const PORT = Number(process.env.PORT || 3001);
+
+// Default to 3000 to perfectly match Coolify's default Nixpacks behavior
+const PORT = process.env.PORT || 3000;
 
 let routes = [];
 
@@ -691,7 +694,7 @@ app.get("/api/debug/eta", async (req, res) => {
 function handleStartupError(error) {
   if (error.code === "EADDRINUSE") {
     console.error(
-      `[Startup] Port ${PORT} is already in use. Run with a different port, e.g. PORT=3001 bun run backend.js`,
+      `[Startup] Port ${PORT} is already in use. Run with a different port, e.g. PORT=3000 node backend.js`,
     );
     process.exit(1);
   }
@@ -713,7 +716,9 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 
-
-app.listen(PORT, '0.0.0.0', () => {
+// ==========================================
+// FIX: Use server.listen so WebSockets and Express share the SAME port!
+// ==========================================
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Routing Backend running on port ${PORT} and listening on 0.0.0.0`);
 });
