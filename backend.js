@@ -806,3 +806,23 @@ process.on("uncaughtException", (error) => {
 server.listen(PORT, () =>
   console.log(`Routing Backend running on port ${PORT}`),
 );
+
+import path from "path";
+
+const app = express();
+// Use the PORT environment variable Coolify provides, or default to 3001
+const port = process.env.PORT || 3001; 
+
+// Tell Express to serve any static files in your current directory 
+// (Useful if you add CSS or frontend JS files later)
+app.use(express.static(process.cwd()));
+
+// When someone visits your main URL, send them the index.html file
+app.get("/", (req, res) => {
+  res.sendFile(path.join(process.cwd(), "index.html"));
+});
+
+// Start the server
+app.listen(port, "0.0.0.0", () => {
+  console.log(`Server is running and listening on port ${port}`);
+});
