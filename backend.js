@@ -2,10 +2,22 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const cors = require("cors");
+const path = require("path"); // Added path module
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ==========================================
+// 0. SERVE FRONTEND UI
+// ==========================================
+// Serve static files (CSS, JS, images) from the root folder
+app.use(express.static(process.cwd()));
+
+// Serve the frontend UI when someone visits the main URL
+app.get("/", (req, res) => {
+  res.sendFile(path.join(process.cwd(), "index.html"));
+});
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -18,140 +30,38 @@ let routes = [];
 // ==========================================
 const lineSequences = {
   TWL: [
-    "CEN",
-    "ADM",
-    "TST",
-    "JOR",
-    "YMT",
-    "MOK",
-    "PRE",
-    "SSP",
-    "CSW",
-    "LCK",
-    "MEI",
-    "LAK",
-    "KWF",
-    "KWH",
-    "TWH",
-    "TSW",
+    "CEN", "ADM", "TST", "JOR", "YMT", "MOK", "PRE", "SSP", 
+    "CSW", "LCK", "MEI", "LAK", "KWF", "KWH", "TWH", "TSW",
   ],
   ISL: [
-    "KET",
-    "HKU",
-    "SYP",
-    "SHW",
-    "CEN",
-    "ADM",
-    "WAC",
-    "CAB",
-    "TIN",
-    "FOH",
-    "NOP",
-    "QUO",
-    "TAK",
-    "SWH",
-    "SKW",
-    "CHW",
+    "KET", "HKU", "SYP", "SHW", "CEN", "ADM", "WAC", "CAB", 
+    "TIN", "FOH", "NOP", "QUO", "TAK", "SWH", "SKW", "CHW",
   ],
   KTL: [
-    "WHA",
-    "HOM",
-    "YMT",
-    "MOK",
-    "PRE",
-    "SKM",
-    "KOT",
-    "LOF",
-    "WTS",
-    "DIH",
-    "CHH",
-    "KOB",
-    "NTK",
-    "KWT",
-    "LAT",
-    "YAT",
-    "TIK",
+    "WHA", "HOM", "YMT", "MOK", "PRE", "SKM", "KOT", "LOF", 
+    "WTS", "DIH", "CHH", "KOB", "NTK", "KWT", "LAT", "YAT", "TIK",
   ],
   SIL: ["ADM", "OCP", "WCH", "LET", "SOH"],
   TML: [
-    "WKS",
-    "MOS",
-    "HEO",
-    "TSH",
-    "SHM",
-    "CIO",
-    "STW",
-    "CKT",
-    "HIK",
-    "TAW",
-    "DIH",
-    "KAK",
-    "SUW",
-    "TKW",
-    "HOM",
-    "HUH",
-    "ETS",
-    "AUS",
-    "NAC",
-    "MEI",
-    "TWC",
-    "TWW",
-    "KSR",
-    "YUL",
-    "LOP",
-    "TIS",
-    "TUM",
+    "WKS", "MOS", "HEO", "TSH", "SHM", "CIO", "STW", "CKT", 
+    "HIK", "TAW", "DIH", "KAK", "SUW", "TKW", "HOM", "HUH", 
+    "ETS", "AUS", "NAC", "MEI", "TWC", "TWW", "KSR", "YUL", 
+    "LOP", "TIS", "TUM",
   ],
   TCL: ["HOK", "KOW", "OLY", "NAC", "LAK", "TSY", "SUN", "TUC"],
   AEL: ["HOK", "KOW", "TSY", "AIR", "AWE"],
   DRL: ["SUN", "DIS"],
   EAL: [
-    "ADM",
-    "EXH",
-    "HUH",
-    "MKK",
-    "KOT",
-    "TAW",
-    "SHT",
-    "FOT",
-    "UNI",
-    "TAP",
-    "TWO",
-    "FAN",
-    "SHS",
-    "LOW",
+    "ADM", "EXH", "HUH", "MKK", "KOT", "TAW", "SHT", "FOT", 
+    "UNI", "TAP", "TWO", "FAN", "SHS", "LOW",
   ],
   EAL_LMC: [
-    "ADM",
-    "EXH",
-    "HUH",
-    "MKK",
-    "KOT",
-    "TAW",
-    "SHT",
-    "FOT",
-    "UNI",
-    "TAP",
-    "TWO",
-    "FAN",
-    "SHS",
-    "LMC",
+    "ADM", "EXH", "HUH", "MKK", "KOT", "TAW", "SHT", "FOT", 
+    "UNI", "TAP", "TWO", "FAN", "SHS", "LMC",
   ],
   EAL_RAC: [
-    "ADM",
-    "EXH",
-    "HUH",
-    "MKK",
-    "KOT",
-    "TAW",
-    "SHT",
-    "RAC",
-    "UNI",
-    "TAP",
-    "TWO",
-    "FAN",
-    "SHS",
-    "LOW",
+    "ADM", "EXH", "HUH", "MKK", "KOT", "TAW", "SHT", "RAC", 
+    "UNI", "TAP", "TWO", "FAN", "SHS", "LOW",
   ],
   TKL: ["NOP", "QUO", "YAT", "TIK", "TKO", "HAH", "POA"],
   TKL_LHP: ["NOP", "QUO", "YAT", "TIK", "TKO", "LHP"],
@@ -803,26 +713,7 @@ process.on("uncaughtException", (error) => {
   process.exit(1);
 });
 
-server.listen(PORT, () =>
+// Start listening on all interfaces (0.0.0.0 is best for Docker/Coolify)
+server.listen(PORT, "0.0.0.0", () =>
   console.log(`Routing Backend running on port ${PORT}`),
 );
-
-import path from "path";
-
-const app = express();
-// Use the PORT environment variable Coolify provides, or default to 3001
-const port = process.env.PORT || 3001; 
-
-// Tell Express to serve any static files in your current directory 
-// (Useful if you add CSS or frontend JS files later)
-app.use(express.static(process.cwd()));
-
-// When someone visits your main URL, send them the index.html file
-app.get("/", (req, res) => {
-  res.sendFile(path.join(process.cwd(), "index.html"));
-});
-
-// Start the server
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Server is running and listening on port ${port}`);
-});
