@@ -243,7 +243,7 @@
         closeAllDropdowns();
       }
 
-      const API_BASE = "http://trafiktrack.duckdns.org/api/routes";
+      const API_BASE = "https://trafiktrack.duckdns.org/api/routes";
       let routes = [];
 
       async function init() {
@@ -252,7 +252,7 @@
           routes = await res.json();
           renderUI();
         } catch (err) {}
-        const ws = new WebSocket("ws://trafiktrack.duckdns.org");
+        const ws = new WebSocket("wss://trafiktrack.duckdns.org");
         ws.onmessage = (event) => {
           const { type, data } = JSON.parse(event.data);
           if (type === "new_route") routes.push(data);
