@@ -23,11 +23,13 @@
       .route-option-card.is-selected {
         transform: scale(1.02);
         z-index: 3;
+        box-shadow: 0 0 42px rgba(255, 255, 255, 0.08);
       }
 
       .route-option-card.is-fusing {
-        opacity: 0;
-        filter: blur(6px);
+        opacity: 0.18;
+        filter: blur(3px) saturate(0.7);
+        z-index: 1;
       }
     </style>
   </head>
@@ -357,7 +359,7 @@
             const isFusing = selectingOptionId && !isSelected;
             const offset = selectedIndex === -1 ? 0 : selectedIndex - index;
             const fuseTransform = isFusing
-              ? `transform: translateY(${offset * 28}px) scale(${Math.max(0.86, 1 - Math.abs(offset) * 0.05)});`
+              ? `transform: translateY(${offset * 34}px) scale(${Math.max(0.82, 1 - Math.abs(offset) * 0.06)});`
               : "";
             const complexityLabel =
               index === 0
@@ -377,8 +379,9 @@
                    <div class="text-xl font-black">${mtrStations[option.startCode]} to ${mtrStations[option.endCode]}</div>
                    <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-400">${formatOptionMeta(option.summary)}</div>
                 </div>
-                <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">${isSelected ? "Locking In..." : "Choose Route"}</button>
+                <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">Choose Route</button>
              </div>
+             ${isSelected ? `<div class="text-[11px] uppercase tracking-[0.28em] text-neutral-400">Locking in selected route</div>` : ""}
              <div class="flex flex-wrap gap-2">${renderLineChips(option.summary)}</div>
              <div class="text-sm text-neutral-400">${option.summary.lineSegments.map((segment) => `${mtrStations[segment.from]} -> ${mtrStations[segment.to]}`).join(" • ")}</div>
           </div>
