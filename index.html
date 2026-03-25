@@ -10,6 +10,25 @@
       ::-webkit-scrollbar {
         display: none;
       }
+
+      .route-option-card {
+        transition:
+          transform 420ms cubic-bezier(0.2, 0.9, 0.2, 1),
+          opacity 420ms ease,
+          filter 420ms ease,
+          box-shadow 420ms ease;
+        transform-origin: center top;
+      }
+
+      .route-option-card.is-selected {
+        transform: scale(1.02);
+        z-index: 3;
+      }
+
+      .route-option-card.is-fusing {
+        opacity: 0;
+        filter: blur(6px);
+      }
     </style>
   </head>
   <body
@@ -27,19 +46,12 @@
       </div>
     </header>
 
-    <main class="flex-1 min-h-0 relative overflow-hidden flex flex-col p-4">
-      <div
-        id="cards-layer"
-        class="flex-1 overflow-y-auto flex flex-col gap-6 items-center pt-4 pb-20 w-full"
-      ></div>
-    </main>
-
     <div
-      class="shrink-0 bg-neutral-950 border-t border-neutral-900 flex flex-col z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.8)] p-4"
+      class="shrink-0 bg-neutral-950/95 border-b border-neutral-900 flex flex-col z-20 shadow-[0_10px_40px_rgba(0,0,0,0.5)] p-4 backdrop-blur-md"
     >
       <form
         id="add-form"
-        class="flex flex-wrap gap-2 items-center max-w-3xl mx-auto w-full"
+        class="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center max-w-3xl mx-auto w-full"
       >
         <div class="flex gap-2 flex-1 relative">
           <div class="relative flex-1" onclick="event.stopPropagation()">
@@ -49,16 +61,16 @@
               onfocus="openDropdown('start')"
               oninput="filterStations('start')"
               placeholder="Start Station"
-              class="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-white"
+              class="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg px-3 py-3 focus:outline-none focus:border-white"
               autocomplete="off"
             />
             <input type="hidden" id="start-code" />
             <div
               id="start-dropdown"
-              class="absolute hidden bottom-full mb-1 left-0 w-full bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50"
+              class="absolute hidden top-full mt-1 left-0 w-full bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50"
             ></div>
           </div>
-          <span class="text-neutral-500 mt-2"
+          <span class="text-neutral-500 mt-3"
             ><i data-lucide="arrow-right" class="w-4 h-4"></i
           ></span>
           <div class="relative flex-1" onclick="event.stopPropagation()">
@@ -68,24 +80,31 @@
               onfocus="openDropdown('end')"
               oninput="filterStations('end')"
               placeholder="Destination Station"
-              class="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-white"
+              class="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg px-3 py-3 focus:outline-none focus:border-white"
               autocomplete="off"
             />
             <input type="hidden" id="end-code" />
             <div
               id="end-dropdown"
-              class="absolute hidden bottom-full mb-1 left-0 w-full bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50"
+              class="absolute hidden top-full mt-1 left-0 w-full bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl max-h-40 overflow-y-auto z-50"
             ></div>
           </div>
         </div>
         <button
           type="submit"
-          class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold shrink-0"
+          class="bg-white text-black px-4 py-3 rounded-lg hover:bg-neutral-300 font-bold shrink-0"
         >
           CALCULATE ROUTING
         </button>
       </form>
     </div>
+
+    <main class="flex-1 min-h-0 relative overflow-hidden flex flex-col p-4 pt-3">
+      <div
+        id="cards-layer"
+        class="flex-1 overflow-y-auto flex flex-col gap-6 items-center pb-8 w-full"
+      ></div>
+    </main>
 
     <script>
       const mtrStations = {
@@ -247,6 +266,7 @@
       const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
       let routes = [];
       let routeOptions = [];
+      let selectingOptionId = null;
 
       const linePalette = {
         TWL: { glow: "rgba(34,197,94,0.35)", border: "rgba(34,197,94,0.7)" },
@@ -325,10 +345,20 @@
       function renderRouteOptions() {
         if (!routeOptions.length) return "";
 
+        const selectedIndex = routeOptions.findIndex(
+          (option) => option.id === selectingOptionId,
+        );
+
         return routeOptions
           .map((option, index) => {
             const firstLine = option.summary.lineSegments[0]?.line;
             const theme = getLineTheme(firstLine, false);
+            const isSelected = option.id === selectingOptionId;
+            const isFusing = selectingOptionId && !isSelected;
+            const offset = selectedIndex === -1 ? 0 : selectedIndex - index;
+            const fuseTransform = isFusing
+              ? `transform: translateY(${offset * 28}px) scale(${Math.max(0.86, 1 - Math.abs(offset) * 0.05)});`
+              : "";
             const complexityLabel =
               index === 0
                 ? "Fastest"
@@ -337,17 +367,17 @@
                   : `Option ${option.rank}`;
 
             return `
-          <div class="w-full max-w-3xl bg-neutral-950 border rounded-2xl p-6 flex flex-col gap-4 relative" style="border-color:${theme.border}; box-shadow: 0 0 28px ${theme.glow};">
+          <div class="route-option-card ${isSelected ? "is-selected" : ""} ${isFusing ? "is-fusing" : ""} w-full max-w-3xl bg-neutral-950 border rounded-2xl p-6 flex flex-col gap-4 relative" style="border-color:${theme.border}; box-shadow: 0 0 28px ${theme.glow}; ${fuseTransform}">
              <div class="flex flex-col gap-3 md:flex-row md:justify-between md:items-start">
                 <div class="flex flex-col gap-2">
                    <div class="flex items-center gap-2 flex-wrap">
-                      <span class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white" style="background:${theme.border};">${complexityLabel}</span>
-                      <span class="text-[10px] font-bold uppercase px-2 py-1 rounded bg-neutral-800 text-neutral-200">Rank ${option.rank}</span>
+                       <span class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white" style="background:${theme.border};">${complexityLabel}</span>
+                      ${routeOptions.length > 1 ? `<span class="text-[10px] font-bold uppercase px-2 py-1 rounded bg-neutral-800 text-neutral-200">Rank ${option.rank}</span>` : ""}
                    </div>
                    <div class="text-xl font-black">${mtrStations[option.startCode]} to ${mtrStations[option.endCode]}</div>
                    <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-400">${formatOptionMeta(option.summary)}</div>
                 </div>
-                <button onclick="chooseRouteOption('${option.id}')" class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0">Choose Route</button>
+                <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">${isSelected ? "Locking In..." : "Choose Route"}</button>
              </div>
              <div class="flex flex-wrap gap-2">${renderLineChips(option.summary)}</div>
              <div class="text-sm text-neutral-400">${option.summary.lineSegments.map((segment) => `${mtrStations[segment.from]} -> ${mtrStations[segment.to]}`).join(" • ")}</div>
@@ -366,7 +396,9 @@
         const ws = new WebSocket(WS_URL);
         ws.onmessage = (event) => {
           const { type, data } = JSON.parse(event.data);
-          if (type === "new_route") routes.push(data);
+          if (type === "new_route") {
+            routes = [data, ...routes.filter((route) => route.id !== data.id)];
+          }
           if (type === "routes_updated") routes = data;
           if (type === "route_deleted")
             routes = routes.filter((r) => r.id !== data);
@@ -393,10 +425,12 @@
           if (!res.ok) {
             const payload = await res.json().catch(() => ({}));
             routeOptions = [];
+            selectingOptionId = null;
             renderUI();
             return alert(payload.error || "No valid routes available.");
           }
           routeOptions = await res.json();
+          selectingOptionId = null;
           document.getElementById("start-search").value = "";
           document.getElementById("end-search").value = "";
           document.getElementById("start-code").value = "";
@@ -406,7 +440,11 @@
 
       window.chooseRouteOption = async (optionId) => {
         const option = routeOptions.find((item) => item.id === optionId);
-        if (!option) return;
+        if (!option || selectingOptionId) return;
+
+        selectingOptionId = optionId;
+        renderUI();
+        await new Promise((resolve) => setTimeout(resolve, 420));
 
         const res = await fetch(API_BASE, {
           method: "POST",
@@ -421,10 +459,15 @@
 
         if (!res.ok) {
           const payload = await res.json().catch(() => ({}));
+          selectingOptionId = null;
+          renderUI();
           return alert(payload.error || "Could not activate the selected route.");
         }
 
+        const createdRoute = await res.json();
+        routes = [createdRoute, ...routes.filter((route) => route.id !== createdRoute.id)];
         routeOptions = [];
+        selectingOptionId = null;
         renderUI();
       };
 
