@@ -2,11 +2,70 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const cors = require("cors");
+const crypto = require("crypto");
 const path = require("path");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const SESSION_COOKIE_NAME = "trafik_session";
+const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
+const ARRIVING_WINDOW_MS = 30000;
+const sessions = new Map();
+
+function parseCookies(cookieHeader = "") {
+  return cookieHeader.split(";").reduce((cookies, chunk) => {
+    const [rawKey, ...rawValue] = chunk.trim().split("=");
+    if (!rawKey) return cookies;
+    cookies[rawKey] = decodeURIComponent(rawValue.join("="));
+    return cookies;
+  }, {});
+}
+
+function buildSessionCookie(sessionId) {
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`;
+}
+
+function createSessionData(sessionId) {
+  return {
+    sessionId,
+    routes: [],
+    sockets: new Set(),
+    updatedAt: Date.now(),
+  };
+}
+
+function getSessionData(sessionId) {
+  if (!sessions.has(sessionId)) {
+    sessions.set(sessionId, createSessionData(sessionId));
+  }
+
+  const session = sessions.get(sessionId);
+  session.updatedAt = Date.now();
+  return session;
+}
+
+function resolveSessionId(req, res) {
+  const cookies = parseCookies(req.headers.cookie);
+  let sessionId = cookies[SESSION_COOKIE_NAME];
+
+  if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    if (res) {
+      res.setHeader("Set-Cookie", buildSessionCookie(sessionId));
+    }
+  }
+
+  req.sessionId = sessionId;
+  req.session = getSessionData(sessionId);
+  return sessionId;
+}
+
+app.use((req, res, next) => {
+  resolveSessionId(req, res);
+  next();
+});
 
 // ==========================================
 // 0. SERVE FRONTEND UI
@@ -25,8 +84,6 @@ const wss = new WebSocket.Server({ server });
 
 // Default to 3000 to perfectly match Coolify's default Nixpacks behavior
 const PORT = process.env.PORT || 3000;
-
-let routes = [];
 
 // ==========================================
 // 1. FULL MTR NETWORK (10 Lines + Branches)
@@ -87,11 +144,32 @@ const lineVariantsByOfficialLine = Object.keys(lineSequences).reduce(
 // 2. GRAPH BUILDER & ROUTING LOGIC
 // ==========================================
 const graph = {};
+const lineTravelMinutes = {
+  TWL: 2.6,
+  ISL: 2.5,
+  KTL: 2.6,
+  SIL: 3.1,
+  TML: 2.9,
+  TCL: 3.2,
+  AEL: 4,
+  DRL: 3.2,
+  EAL: 3,
+  EAL_LMC: 3,
+  EAL_RAC: 3,
+  TKL: 2.8,
+  TKL_LHP: 3,
+};
+
+function getEdgeTravelMinutes(line) {
+  return lineTravelMinutes[line] || 2.8;
+}
+
 function addEdge(a, b, line) {
+  const weight = getEdgeTravelMinutes(line);
   if (!graph[a]) graph[a] = [];
   if (!graph[b]) graph[b] = [];
-  graph[a].push({ node: b, weight: 2, line });
-  graph[b].push({ node: a, weight: 2, line });
+  graph[a].push({ node: b, weight, line });
+  graph[b].push({ node: a, weight, line });
 }
 
 Object.entries(lineSequences).forEach(([line, stations]) => {
@@ -215,12 +293,14 @@ function generateItinerary(start, end) {
     const currentOfficialLine = getOfficialLine(path[segmentStart].line);
     let segmentEnd = segmentStart;
     let commuteTime = 0;
+    let stopCount = 0;
 
     while (
       segmentEnd < path.length &&
       getOfficialLine(path[segmentEnd].line) === currentOfficialLine
     ) {
       commuteTime += path[segmentEnd].weight;
+      stopCount++;
       segmentEnd++;
     }
 
@@ -241,7 +321,7 @@ function generateItinerary(start, end) {
       line: rideLine,
       start: firstEdge.from,
       end: lastEdge.to,
-      duration: commuteTime,
+      duration: Math.max(3, Math.ceil(commuteTime + Math.max(1, stopCount * 0.5))),
     });
 
     if (segmentEnd < path.length) {
@@ -249,7 +329,7 @@ function generateItinerary(start, end) {
         type: "TRANSFERRING",
         station: lastEdge.to,
         toLine: path[segmentEnd].line,
-        duration: 4,
+        duration: 5,
       });
     }
 
@@ -324,6 +404,8 @@ async function fetchStationScheduleDetails(line, station, options = {}) {
         apiStatus: cached.apiStatus,
         resultCode: cached.resultCode,
         message: cached.message,
+        isDelay: cached.isDelay,
+        rawData: cached.rawData,
         officialLine,
         apiStation,
         stationKey,
@@ -389,10 +471,12 @@ async function fetchStationScheduleDetails(line, station, options = {}) {
       });
     }
     apiCache.set(cacheKey, {
+      rawData: data,
       trainData,
       apiStatus: data?.status ?? null,
       resultCode: data?.resultCode ?? null,
       message: data?.message ?? null,
+      isDelay: data?.isdelay ?? null,
       expires: Date.now() + 8000,
     });
     return {
@@ -403,6 +487,8 @@ async function fetchStationScheduleDetails(line, station, options = {}) {
         apiStatus: data?.status ?? null,
         resultCode: data?.resultCode ?? null,
         message: data?.message ?? null,
+        isDelay: data?.isdelay ?? null,
+        rawData: data,
         officialLine,
         apiStation,
         stationKey,
@@ -435,33 +521,69 @@ async function fetchStationScheduleDetails(line, station, options = {}) {
   }
 }
 
-async function fetchStationSchedule(line, station) {
-  const { trainData } = await fetchStationScheduleDetails(line, station);
-  return trainData;
+function getApiAvailability(metadata, trainData, direction) {
+  if (metadata.httpStatus && metadata.httpStatus >= 400) {
+    return {
+      status: "UNAVAILABLE",
+      reason: metadata.message || `HTTP ${metadata.httpStatus}`,
+      source: "http_error",
+    };
+  }
+
+  if (metadata.apiStatus !== null && metadata.apiStatus !== 1) {
+    return {
+      status: "UNAVAILABLE",
+      reason: metadata.message || metadata.resultCode || "API unavailable",
+      source: "api_error",
+    };
+  }
+
+  if (!trainData) {
+    return {
+      status: "UNAVAILABLE",
+      reason: metadata.message || "No live data returned",
+      source: "missing_station_data",
+    };
+  }
+
+  if (!Array.isArray(trainData[direction]) || trainData[direction].length === 0) {
+    const hasAnyDirectionalData = Object.values(trainData).some(
+      (value) => Array.isArray(value) && value.length > 0,
+    );
+
+    return {
+      status: hasAnyDirectionalData ? "UNAVAILABLE" : "SERVICE_ENDED",
+      reason: metadata.message || (hasAnyDirectionalData ? "No trains available" : "Service ended"),
+      source: hasAnyDirectionalData ? "direction_empty" : "service_ended",
+    };
+  }
+
+  return {
+    status: "LIVE",
+    reason: null,
+    source: "live",
+  };
 }
 
 async function fetchExactETA(line, station, direction, destinationStation) {
-  const trainData = await fetchStationSchedule(line, station);
+  const { trainData, metadata } = await fetchStationScheduleDetails(line, station);
+  const availability = getApiAvailability(metadata, trainData, direction);
 
-  if (!trainData) {
+  if (availability.status !== "LIVE") {
     logEta("warn", "No schedule returned for ETA lookup", {
       line,
       station,
       direction,
       destinationStation,
+      availability: availability.status,
+      reason: availability.reason,
     });
-    return null;
-  }
-
-  if (!Array.isArray(trainData[direction]) || trainData[direction].length === 0) {
-    logEta("warn", "No trains for requested direction", {
-      line,
-      station,
-      direction,
-      destinationStation,
-      availableKeys: Object.keys(trainData).join(","),
-    });
-    return null;
+    return {
+      targetTime: null,
+      availability,
+      isDelayed: metadata.isDelay === "Y",
+      raw: null,
+    };
   }
 
   if (trainData && Array.isArray(trainData[direction])) {
@@ -490,7 +612,16 @@ async function fetchExactETA(line, station, direction, destinationStation) {
           .filter(Boolean)
           .join(","),
       });
-      return null;
+      return {
+        targetTime: null,
+        availability: {
+          status: "UNAVAILABLE",
+          reason: metadata.message || "No train serves this destination right now",
+          source: "destination_filtered",
+        },
+        isDelayed: metadata.isDelay === "Y",
+        raw: null,
+      };
     }
 
     if (!matchingTrain && destinationStation) {
@@ -508,7 +639,12 @@ async function fetchExactETA(line, station, direction, destinationStation) {
 
     if (selectedTrain?.time) {
       const timeStr = selectedTrain.time.replace(" ", "T") + "+08:00";
-      return new Date(timeStr).getTime();
+      return {
+        targetTime: new Date(timeStr).getTime(),
+        availability,
+        isDelayed: metadata.isDelay === "Y",
+        raw: selectedTrain,
+      };
     }
 
     logEta("warn", "Selected train missing ETA time", {
@@ -520,39 +656,122 @@ async function fetchExactETA(line, station, direction, destinationStation) {
     });
   }
 
-  return null;
+  return {
+    targetTime: null,
+    availability: {
+      status: "UNAVAILABLE",
+      reason: metadata.message || "Selected train is missing time data",
+      source: "missing_time",
+    },
+    isDelayed: metadata.isDelay === "Y",
+    raw: null,
+  };
+}
+
+function applyLiveEtaToLeg(leg, etaResult) {
+  const now = Date.now();
+  const previousTarget = leg.targetTime || null;
+  const liveEpoch = etaResult?.targetTime || null;
+  const availability = etaResult?.availability || {
+    status: "UNAVAILABLE",
+    reason: "Live data unavailable",
+    source: "unknown",
+  };
+
+  leg.lastApiUpdatedAt = now;
+  leg.apiStatus = availability.status;
+  leg.apiReason = availability.reason;
+  leg.apiSource = availability.source;
+  leg.isDelayed = etaResult?.isDelayed === true;
+
+  if (!liveEpoch) {
+    if (previousTarget && previousTarget - now <= ARRIVING_WINDOW_MS) {
+      leg.arrivalState = "ARRIVING";
+      return true;
+    }
+
+    leg.targetTime = null;
+    leg.arrivalState = availability.status;
+    return previousTarget !== null;
+  }
+
+  const isNearArrival = previousTarget && previousTarget - now <= ARRIVING_WINDOW_MS;
+  const jumpedToLaterTrain = previousTarget && liveEpoch - previousTarget > ARRIVING_WINDOW_MS;
+
+  if (isNearArrival && jumpedToLaterTrain) {
+    leg.arrivalState = "ARRIVING";
+    return previousTarget - now > 0;
+  }
+
+  leg.targetTime = liveEpoch;
+  leg.arrivalState = liveEpoch - now <= ARRIVING_WINDOW_MS ? "ARRIVING" : "COUNTDOWN";
+  return previousTarget !== leg.targetTime;
+}
+
+function serializeRoutes(sessionId) {
+  return getSessionData(sessionId).routes;
+}
+
+function broadcastToSession(sessionId, type, data) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+
+  session.sockets.forEach((socket) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type, data }));
+    }
+  });
 }
 
 setInterval(async () => {
-  let hasUpdates = false;
-  for (let route of routes) {
-    if (route.status !== "ACTIVE") continue;
-    const leg = route.legs[route.currentLegIndex];
+  for (const [sessionId, session] of sessions.entries()) {
+    let hasUpdates = false;
 
-    if (leg && leg.type === "WAITING") {
-      const liveEpoch = await fetchExactETA(
-        leg.line,
-        leg.station,
-        leg.direction,
-        leg.destinationStation,
-      );
-      if (liveEpoch && liveEpoch !== leg.targetTime) {
-        leg.targetTime = liveEpoch;
-        hasUpdates = true;
+    for (const route of session.routes) {
+      if (route.status !== "ACTIVE") continue;
+      const leg = route.legs[route.currentLegIndex];
+
+      if (leg && leg.type === "WAITING") {
+        const etaResult = await fetchExactETA(
+          leg.line,
+          leg.station,
+          leg.direction,
+          leg.destinationStation,
+        );
+        if (applyLiveEtaToLeg(leg, etaResult)) {
+          hasUpdates = true;
+        }
       }
     }
+
+    if (hasUpdates) {
+      broadcastToSession(sessionId, "routes_updated", serializeRoutes(sessionId));
+    }
+
+    if (
+      session.sockets.size === 0 &&
+      session.routes.length === 0 &&
+      Date.now() - session.updatedAt > SESSION_TTL_MS
+    ) {
+      sessions.delete(sessionId);
+    }
   }
-  if (hasUpdates) broadcast("routes_updated", routes);
 }, 10000);
 
 // ==========================================
 // 4. API & WEBSOCKET ROUTES
 // ==========================================
-function broadcast(type, data) {
-  wss.clients.forEach((c) => {
-    if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ type, data }));
+wss.on("connection", (socket, req) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const sessionId = cookies[SESSION_COOKIE_NAME] || crypto.randomUUID();
+  const session = getSessionData(sessionId);
+  session.sockets.add(socket);
+
+  socket.on("close", () => {
+    session.sockets.delete(socket);
+    session.updatedAt = Date.now();
   });
-}
+});
 
 app.post("/api/routes", async (req, res) => {
   const { name, startCode, endCode } = req.body;
@@ -562,14 +781,14 @@ app.post("/api/routes", async (req, res) => {
   const legs = generateItinerary(startCode, endCode);
 
   if (legs[0] && legs[0].type === "WAITING") {
-    const liveEpoch = await fetchExactETA(
+    const etaResult = await fetchExactETA(
       legs[0].line,
       legs[0].station,
       legs[0].direction,
       legs[0].destinationStation,
     );
-    if (!liveEpoch) {
-      logEta("warn", "Falling back to synthetic 3 minute ETA", {
+    if (!etaResult?.targetTime) {
+      logEta("warn", "Initial route created without live ETA", {
         routeName: name,
         line: legs[0].line,
         station: legs[0].station,
@@ -577,23 +796,23 @@ app.post("/api/routes", async (req, res) => {
         destinationStation: legs[0].destinationStation,
       });
     }
-    legs[0].targetTime = liveEpoch || Date.now() + 180000;
+    applyLiveEtaToLeg(legs[0], etaResult);
   }
 
   const newRoute = {
-    id: `R-${Date.now()}`,
+    id: `R-${crypto.randomUUID()}`,
     name,
     legs,
     currentLegIndex: 0,
     status: "ACTIVE",
   };
-  routes.push(newRoute);
-  broadcast("new_route", newRoute);
+  req.session.routes.push(newRoute);
+  broadcastToSession(req.sessionId, "new_route", newRoute);
   res.status(201).json(newRoute);
 });
 
 app.post("/api/routes/:id/advance", async (req, res) => {
-  const route = routes.find((r) => r.id === req.params.id);
+  const route = req.session.routes.find((r) => r.id === req.params.id);
   if (!route) return res.status(404).json({ error: "Not found" });
 
   route.currentLegIndex++;
@@ -601,15 +820,21 @@ app.post("/api/routes/:id/advance", async (req, res) => {
     route.status = "COMPLETED";
   } else {
     const nextLeg = route.legs[route.currentLegIndex];
+    const previousLeg = route.legs[route.currentLegIndex - 1];
+
+    if (nextLeg.type === "COMMUTING" && previousLeg?.type === "WAITING") {
+      nextLeg.isDelayed = previousLeg.isDelayed === true;
+    }
+
     if (nextLeg.type === "WAITING") {
-      const liveEpoch = await fetchExactETA(
+      const etaResult = await fetchExactETA(
         nextLeg.line,
         nextLeg.station,
         nextLeg.direction,
         nextLeg.destinationStation,
       );
-      if (!liveEpoch) {
-        logEta("warn", "Advance route used fallback ETA", {
+      if (!etaResult?.targetTime) {
+        logEta("warn", "Advance route has no live ETA", {
           routeId: route.id,
           line: nextLeg.line,
           station: nextLeg.station,
@@ -617,22 +842,24 @@ app.post("/api/routes/:id/advance", async (req, res) => {
           destinationStation: nextLeg.destinationStation,
         });
       }
-      nextLeg.targetTime = liveEpoch || Date.now() + 180000;
+      applyLiveEtaToLeg(nextLeg, etaResult);
     } else {
       nextLeg.targetTime = Date.now() + nextLeg.duration * 60000;
     }
   }
-  broadcast("routes_updated", routes);
+  req.session.updatedAt = Date.now();
+  broadcastToSession(req.sessionId, "routes_updated", req.session.routes);
   res.json(route);
 });
 
 app.delete("/api/routes/:id", (req, res) => {
-  routes = routes.filter((r) => r.id !== req.params.id);
-  broadcast("route_deleted", req.params.id);
+  req.session.routes = req.session.routes.filter((r) => r.id !== req.params.id);
+  req.session.updatedAt = Date.now();
+  broadcastToSession(req.sessionId, "route_deleted", req.params.id);
   res.sendStatus(204);
 });
 
-app.get("/api/routes", (req, res) => res.json(routes));
+app.get("/api/routes", (req, res) => res.json(req.session.routes));
 
 app.get("/api/debug/station-code/:station", (req, res) => {
   const station = req.params.station.toUpperCase();
@@ -672,6 +899,9 @@ app.get("/api/debug/eta", async (req, res) => {
       train.dest,
     ),
   );
+  const etaResult = direction
+    ? await fetchExactETA(line, station, direction, destinationStation)
+    : null;
 
   res.json({
     request: {
@@ -684,9 +914,7 @@ app.get("/api/debug/eta", async (req, res) => {
     availableKeys: trainData ? Object.keys(trainData) : [],
     candidateDestinations: trains.map((train) => train.dest).filter(Boolean),
     selectedTrain,
-    etaEpoch: selectedTrain?.time
-      ? new Date(selectedTrain.time.replace(" ", "T") + "+08:00").getTime()
-      : null,
+    etaResult,
     trainData,
   });
 });

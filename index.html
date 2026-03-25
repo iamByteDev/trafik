@@ -243,8 +243,59 @@
         closeAllDropdowns();
       }
 
-      const API_BASE = "https://trafiktrack.duckdns.org/api/routes";
+      const API_BASE = `${window.location.origin}/api/routes`;
+      const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
       let routes = [];
+
+      const linePalette = {
+        TWL: { glow: "rgba(34,197,94,0.35)", border: "rgba(34,197,94,0.7)" },
+        ISL: { glow: "rgba(59,130,246,0.35)", border: "rgba(59,130,246,0.7)" },
+        KTL: { glow: "rgba(16,185,129,0.35)", border: "rgba(16,185,129,0.7)" },
+        EAL: { glow: "rgba(79,70,229,0.35)", border: "rgba(79,70,229,0.7)" },
+        EAL_LMC: { glow: "rgba(79,70,229,0.35)", border: "rgba(79,70,229,0.7)" },
+        EAL_RAC: { glow: "rgba(79,70,229,0.35)", border: "rgba(79,70,229,0.7)" },
+        TML: { glow: "rgba(6,182,212,0.35)", border: "rgba(6,182,212,0.7)" },
+        SIL: { glow: "rgba(245,158,11,0.35)", border: "rgba(245,158,11,0.7)" },
+        TCL: { glow: "rgba(251,146,60,0.35)", border: "rgba(251,146,60,0.7)" },
+        AEL: { glow: "rgba(14,165,233,0.35)", border: "rgba(14,165,233,0.7)" },
+        TKL: { glow: "rgba(236,72,153,0.35)", border: "rgba(236,72,153,0.7)" },
+        TKL_LHP: { glow: "rgba(236,72,153,0.35)", border: "rgba(236,72,153,0.7)" },
+        DRL: { glow: "rgba(168,85,247,0.35)", border: "rgba(168,85,247,0.7)" },
+      };
+
+      function getLineTheme(line, isDelayed) {
+        if (isDelayed) {
+          return {
+            border: "rgba(239,68,68,0.95)",
+            glow: "rgba(127,29,29,0.55)",
+            chip: "bg-red-600",
+            label: "text-red-200",
+          };
+        }
+
+        const palette = linePalette[line] || {
+          glow: "rgba(115,115,115,0.35)",
+          border: "rgba(163,163,163,0.6)",
+        };
+
+        return {
+          ...palette,
+          chip: "bg-neutral-700",
+          label: "text-neutral-300",
+        };
+      }
+
+      function getActiveLeg(item) {
+        return item.legs[item.currentLegIndex] || null;
+      }
+
+      function getRouteStatusLabel(item) {
+        const activeLeg = getActiveLeg(item);
+        if (!activeLeg || activeLeg.type !== "WAITING") return null;
+        if (activeLeg.apiStatus === "SERVICE_ENDED") return "Service Over";
+        if (activeLeg.apiStatus === "UNAVAILABLE") return "Unavailable";
+        return null;
+      }
 
       async function init() {
         try {
@@ -252,7 +303,7 @@
           routes = await res.json();
           renderUI();
         } catch (err) {}
-        const ws = new WebSocket("wss://trafiktrack.duckdns.org");
+        const ws = new WebSocket(WS_URL);
         ws.onmessage = (event) => {
           const { type, data } = JSON.parse(event.data);
           if (type === "new_route") routes.push(data);
@@ -292,6 +343,7 @@
       };
 
       function formatRouteTime(totalMinutes) {
+        if (totalMinutes === null) return "Unavailable";
         if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return "<1m";
         const roundedMinutes = Math.ceil(totalMinutes);
         const hours = Math.floor(roundedMinutes / 60);
@@ -309,14 +361,51 @@
           if (index < item.currentLegIndex) return total;
 
           if (leg.type === "WAITING") {
+            if (index === item.currentLegIndex && leg.apiStatus === "SERVICE_ENDED") {
+              return null;
+            }
+
+            if (index === item.currentLegIndex && leg.apiStatus === "UNAVAILABLE") {
+              return null;
+            }
+
             if (index === item.currentLegIndex && leg.targetTime) {
               return total + Math.max(0, leg.targetTime - now) / 60000;
             }
+
+            if (total === null) return null;
             return total + 3;
           }
 
+          if (total === null) return null;
           return total + (leg.duration || 0);
         }, 0);
+      }
+
+      function getDisplayState(leg) {
+        if (leg.type !== "WAITING") return "LIVE";
+        if (leg.arrivalState === "ARRIVING") return "ARRIVING";
+        if (leg.apiStatus === "SERVICE_ENDED") return "SERVICE_ENDED";
+        if (leg.apiStatus === "UNAVAILABLE") return "UNAVAILABLE";
+        return leg.targetTime ? "COUNTDOWN" : "UNAVAILABLE";
+      }
+
+      function buildWaitingSubtitle(leg) {
+        const parts = [`At ${mtrStations[leg.station]} (To ${mtrStations[leg.destinationStation]})`];
+
+        if (leg.isDelayed) {
+          parts.push("Delay reported");
+        }
+
+        if (leg.apiStatus === "SERVICE_ENDED") {
+          parts.push(leg.apiReason || "Service ended");
+        } else if (leg.apiStatus === "UNAVAILABLE") {
+          parts.push(leg.apiReason || "Live ETA unavailable");
+        } else if (leg.lastApiUpdatedAt) {
+          parts.push("Refreshes every 10s");
+        }
+
+        return parts.join(" • ");
       }
 
       function renderUI() {
@@ -324,14 +413,16 @@
           .map((item) => {
             if (item.status === "COMPLETED") return "";
 
-            const totalRemaining = formatRouteTime(
-              estimateRemainingMinutes(item),
-            );
+            const activeLeg = getActiveLeg(item);
+            const routeTheme = getLineTheme(activeLeg?.line, activeLeg?.isDelayed);
+            const totalRemaining = formatRouteTime(estimateRemainingMinutes(item));
+            const routeStatusLabel = getRouteStatusLabel(item);
 
             const legsHtml = item.legs
               .map((leg, i) => {
                 const isActive = i === item.currentLegIndex;
                 const isPast = i < item.currentLegIndex;
+                const legTheme = getLineTheme(leg.line || leg.toLine, leg.isDelayed);
 
                 let title = "";
                 let subtitle = "";
@@ -341,39 +432,52 @@
                     ? "bg-neutral-800 border-neutral-600 shadow-lg"
                     : "bg-neutral-950 opacity-80";
                 let badgeStyle = isActive ? "text-white" : "text-neutral-400";
+                let inlineStyle = "";
 
                 const lName = lineNames[leg.line];
                 const toName = lineNames[leg.toLine];
 
                 if (leg.type === "WAITING") {
                   title = `Wait for ${lName}`;
-                  subtitle = `At ${mtrStations[leg.station]} (To ${mtrStations[leg.destinationStation]})`;
-                  badgeStyle = isActive ? "bg-amber-600" : "bg-neutral-700";
+                  subtitle = buildWaitingSubtitle(leg);
+                  badgeStyle = isActive
+                    ? leg.isDelayed
+                      ? "bg-red-600"
+                      : "bg-amber-600"
+                    : "bg-neutral-700";
                 } else if (leg.type === "COMMUTING") {
                   title = `Ride ${lName}`;
-                  subtitle = `Towards ${mtrStations[leg.end]}`;
+                  subtitle = `Towards ${mtrStations[leg.end]}${leg.isDelayed ? " • Delay reported" : ""}`;
                   badgeStyle = isActive ? "bg-blue-600" : "bg-neutral-700";
                 } else if (leg.type === "TRANSFERRING") {
                   title = `Transfer to ${toName}`;
                   subtitle = `Walk at ${mtrStations[leg.station]}`;
-                  badgeStyle = isActive ? "bg-purple-600" : "bg-neutral-700";
+                  badgeStyle = isActive ? "bg-cyan-700" : "bg-neutral-700";
+                }
+
+                if (!isPast && leg.isDelayed) {
+                  bgStyle = isActive
+                    ? "bg-neutral-900 shadow-lg"
+                    : "bg-neutral-950 opacity-95";
+                  inlineStyle = `border-color:${legTheme.border}; box-shadow: inset 0 0 0 1px ${legTheme.border}, 0 0 24px ${legTheme.glow};`;
                 }
 
                 let rightPanelHtml = "";
                 if (isActive) {
+                  const displayState = getDisplayState(leg);
                   rightPanelHtml = `
                 <div class="flex flex-col items-end gap-2">
-                   <div class="time-display text-3xl font-black tracking-tighter" data-target="${leg.targetTime}" data-phase="${leg.type}">--:--</div>
+                   <div class="time-display text-3xl font-black tracking-tighter" data-target="${leg.targetTime || ""}" data-phase="${leg.type}" data-status="${displayState}" data-reason="${leg.apiReason || ""}">--:--</div>
                    <button onclick="advanceRoute('${item.id}')" class="bg-white text-black px-3 py-1 rounded text-xs font-bold hover:bg-neutral-300 uppercase">Next Step</button>
-                </div>`;
+                 </div>`;
                 } else if (isPast) {
                   rightPanelHtml = `<div class="text-neutral-600"><i data-lucide="check-circle-2" class="w-6 h-6"></i></div>`;
                 } else {
-                  rightPanelHtml = `<div class="text-neutral-600 font-mono text-sm">${leg.duration ? "~" + leg.duration + "m" : "LIVE"}</div>`;
+                  rightPanelHtml = `<div class="text-neutral-600 font-mono text-sm">${leg.duration ? "~" + leg.duration + "m" : leg.apiStatus === "SERVICE_ENDED" ? "SERVICE OVER" : leg.apiStatus === "UNAVAILABLE" ? "UNAVAILABLE" : "LIVE"}</div>`;
                 }
 
                 return `
-            <div class="flex items-center p-4 rounded-xl border border-neutral-800 ${bgStyle} transition-all w-full">
+            <div class="flex items-center p-4 rounded-xl border border-neutral-800 ${bgStyle} transition-all w-full" style="${inlineStyle}">
                <div class="flex flex-col gap-1 flex-1">
                   <div class="flex items-center gap-2"><span class="text-[10px] font-bold uppercase px-2 py-0.5 rounded text-white ${badgeStyle}">${leg.type}</span><span class="font-bold text-sm ${isActive ? "text-white" : "text-neutral-400"}">${title}</span></div>
                   <div class="text-xs font-medium text-neutral-500 uppercase tracking-wide">${subtitle}</div>
@@ -385,14 +489,15 @@
               .join("");
 
             return `
-          <div class="w-full max-w-3xl bg-neutral-950 border border-neutral-800 rounded-2xl p-6 flex flex-col gap-5 relative">
-             <div class="flex justify-between items-center border-b border-neutral-800 pb-4">
-                 <div class="text-xl font-black">${item.name}</div>
-                 <div class="flex items-center gap-3">
-                    <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">ETA ${totalRemaining}</div>
-                    <button onclick="deleteRoute('${item.id}')" class="text-neutral-500 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
-                 </div>
-              </div>
+          <div class="w-full max-w-3xl bg-neutral-950 border border-neutral-800 rounded-2xl p-6 flex flex-col gap-5 relative" style="border-color:${routeTheme.border}; box-shadow: 0 0 32px ${routeTheme.glow};">
+             <div class="flex justify-between items-center border-b border-neutral-800 pb-4" style="border-color:${routeTheme.border}">
+                  <div class="text-xl font-black">${item.name}</div>
+                  <div class="flex items-center gap-3">
+                     ${routeStatusLabel ? `<div class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white ${activeLeg?.isDelayed ? "bg-red-600" : "bg-neutral-700"}">${routeStatusLabel}</div>` : ""}
+                     <div class="text-xs font-semibold uppercase tracking-[0.2em] ${activeLeg?.isDelayed ? "text-red-300" : "text-neutral-500"}">ETA ${totalRemaining}</div>
+                     <button onclick="deleteRoute('${item.id}')" class="text-neutral-500 hover:text-red-500"><i data-lucide="trash-2" class="w-5 h-5"></i></button>
+                  </div>
+               </div>
               <div class="flex flex-col gap-3">${legsHtml}</div>
            </div>
         `;
@@ -404,9 +509,27 @@
       function updateLoop() {
         const now = Date.now();
         document.querySelectorAll(".time-display").forEach((el) => {
-          const target = parseInt(el.getAttribute("data-target"));
+          const rawTarget = el.getAttribute("data-target");
+          const status = el.getAttribute("data-status");
           const phase = el.getAttribute("data-phase");
-          if (!target) return;
+          const target = rawTarget ? parseInt(rawTarget, 10) : NaN;
+
+          if (status === "SERVICE_ENDED") {
+            el.innerHTML = `<span class="text-red-400 text-xl">SERVICE OVER</span>`;
+            return;
+          }
+
+          if (status === "UNAVAILABLE") {
+            el.innerHTML = `<span class="text-neutral-400 text-xl">UNAVAILABLE</span>`;
+            return;
+          }
+
+          if (status === "ARRIVING") {
+            el.innerHTML = `<span class="text-amber-500 text-xl animate-pulse">ARRIVING</span>`;
+            return;
+          }
+
+          if (!Number.isFinite(target)) return;
 
           const remainingMs = Math.max(0, target - now);
           const mins = Math.floor(remainingMs / 60000);
