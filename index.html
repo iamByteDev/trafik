@@ -27,7 +27,9 @@
       class="shrink-0 px-6 py-4 border-b border-neutral-900 flex justify-between items-center z-10 bg-black/80 backdrop-blur-md"
     >
       <div class="flex items-center gap-2">
-        <img src="/favicon.ico" alt="TRAFIK logo" class="w-10 h-10 rounded-xl object-cover shadow-[0_0_18px_rgba(255,255,255,0.16)]" />
+        <div class="w-10 h-10 rounded-xl bg-neutral-900 ring-1 ring-neutral-800 flex items-center justify-center shadow-[0_0_18px_rgba(255,255,255,0.16)] overflow-hidden p-1">
+          <img src="/favicon.ico" alt="TRAFIK logo" class="w-full h-full object-contain" />
+        </div>
         <h1 class="text-2xl font-black tracking-widest text-white">TRAFIK</h1>
       </div>
     </header>
@@ -392,7 +394,7 @@
         const selected = cards.find((card) => card.dataset.optionId === optionId);
 
         if (!selected || cards.length <= 1) {
-          await new Promise((resolve) => setTimeout(resolve, OPTION_FUSE_MS));
+          await new Promise((resolve) => setTimeout(resolve, OPTION_FUSE_MS + 500));
           return;
         }
 
@@ -414,12 +416,7 @@
                   offset: 0,
                 },
                 {
-                  transform: "translate3d(0, -8px, 0) scale(1.03)",
-                  opacity: 1,
-                  offset: 0.55,
-                },
-                {
-                  transform: "translate3d(0, -14px, 0) scale(1.08)",
+                  transform: "translate3d(0, -4px, 0) scale(1.01)",
                   opacity: 1,
                   offset: 1,
                 },
@@ -452,7 +449,7 @@
               },
               {
                 transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scale})`,
-                opacity: 0.08,
+                opacity: 0,
                 filter: "blur(1.4px)",
                 offset: 1,
               },
@@ -467,6 +464,45 @@
         });
 
         await Promise.allSettled(animations);
+
+        cards.forEach((card) => {
+          if (card === selected) {
+            card.style.transform = "translate3d(0, -4px, 0) scale(1.01)";
+            card.style.opacity = "1";
+            card.style.filter = "none";
+            card.style.zIndex = "4";
+            return;
+          }
+
+          card.style.transform = "translate3d(0, 0, 0) scale(0.7)";
+          card.style.opacity = "0";
+          card.style.filter = "blur(1.4px)";
+          card.style.pointerEvents = "none";
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        await selected
+          .animate(
+            [
+              {
+                transform: "translate3d(0, -4px, 0) scale(1.01)",
+                opacity: 1,
+              },
+              {
+                transform: "translate3d(0, -18px, 0) scale(1.08)",
+                opacity: 1,
+              },
+            ],
+            {
+              duration: 380,
+              easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+              fill: "forwards",
+            },
+          )
+          .finished;
+
+        selected.style.transform = "translate3d(0, -18px, 0) scale(1.08)";
       }
 
       document
