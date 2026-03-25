@@ -256,6 +256,7 @@
       let routes = [];
       let routeOptions = [];
       let selectingOptionId = null;
+      let deferredSocketEvents = [];
 
       const linePalette = {
         TWL: { glow: "rgba(34,197,94,0.35)", border: "rgba(34,197,94,0.7)" },
@@ -375,18 +376,38 @@
         const ws = new WebSocket(WS_URL);
         ws.onmessage = (event) => {
           const { type, data } = JSON.parse(event.data);
-          if (type === "new_route") {
-            routes = [data, ...routes.filter((route) => route.id !== data.id)];
+
+          if (selectingOptionId) {
+            deferredSocketEvents.push({ type, data });
+            return;
           }
-          if (type === "routes_updated") routes = data;
-          if (type === "route_deleted")
-            routes = routes.filter((r) => r.id !== data);
-          renderUI();
+
+          applySocketEvent(type, data);
         };
+      }
+
+      function applySocketEvent(type, data) {
+        if (type === "new_route") {
+          routes = [data, ...routes.filter((route) => route.id !== data.id)];
+        }
+        if (type === "routes_updated") routes = data;
+        if (type === "route_deleted") {
+          routes = routes.filter((r) => r.id !== data);
+        }
+        renderUI();
+      }
+
+      function flushDeferredSocketEvents() {
+        if (!deferredSocketEvents.length) return;
+
+        const queuedEvents = deferredSocketEvents;
+        deferredSocketEvents = [];
+        queuedEvents.forEach(({ type, data }) => applySocketEvent(type, data));
       }
 
       function resetOptionSelectionState() {
         selectingOptionId = null;
+        flushDeferredSocketEvents();
       }
 
       async function animateRouteOptionFusion(optionId) {
