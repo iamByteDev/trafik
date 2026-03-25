@@ -401,6 +401,8 @@
         const selectedRect = selected.getBoundingClientRect();
         const selectedCenterX = selectedRect.left + selectedRect.width / 2;
         const selectedCenterY = selectedRect.top + selectedRect.height / 2;
+        selected.style.position = "relative";
+        selected.style.zIndex = "100000";
 
         const animations = cards.map((card, index) => {
           const rect = card.getBoundingClientRect();
@@ -432,6 +434,8 @@
           const deltaX = (selectedCenterX - centerX) * 0.94;
           const deltaY = (selectedCenterY - centerY) * 0.94;
           const scale = Math.max(0.7, 0.9 - index * 0.03);
+          card.style.position = "relative";
+          card.style.zIndex = String(Math.max(1, 99990 - index));
 
           return card.animate(
             [
@@ -470,9 +474,9 @@
             card.style.transform = "translate3d(0, -4px, 0) scale(1.01)";
             card.style.opacity = "1";
             card.style.filter = "none";
-            card.style.zIndex = "4";
-            return;
-          }
+          card.style.zIndex = "100000";
+          return;
+        }
 
           card.style.transform = "translate3d(0, 0, 0) scale(0.7)";
           card.style.opacity = "0";
@@ -480,7 +484,7 @@
           card.style.pointerEvents = "none";
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 850));
 
         await selected
           .animate(
