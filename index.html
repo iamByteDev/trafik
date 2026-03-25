@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TRAFIK - Commute With Style</title>
-    <link rel="icon" href="/favicon.ico" sizes="192x192" type="image/x-icon" />
+    <link rel="icon" href="/favicon.ico?v=3" sizes="any" type="image/x-icon" />
+    <link rel="shortcut icon" href="/favicon.ico?v=3" type="image/x-icon" />
+    <link rel="apple-touch-icon" href="/favicon.ico?v=3" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
@@ -14,10 +16,10 @@
 
       .route-option-card {
         transition:
-          transform 760ms cubic-bezier(0.16, 1, 0.3, 1),
-          opacity 760ms cubic-bezier(0.2, 0.8, 0.2, 1),
-          filter 760ms cubic-bezier(0.2, 0.8, 0.2, 1),
-          box-shadow 760ms cubic-bezier(0.16, 1, 0.3, 1);
+          transform 520ms cubic-bezier(0.22, 1, 0.36, 1),
+          opacity 520ms cubic-bezier(0.22, 1, 0.36, 1),
+          filter 520ms cubic-bezier(0.22, 1, 0.36, 1),
+          box-shadow 520ms cubic-bezier(0.22, 1, 0.36, 1);
         transform-origin: center top;
         will-change: transform, opacity, filter;
       }
@@ -28,9 +30,21 @@
         box-shadow: 0 16px 48px rgba(255, 255, 255, 0.08);
       }
 
+      .route-option-card.is-expanding {
+        transform: translateY(-14px) scale(1.07);
+        z-index: 4;
+        box-shadow: 0 24px 72px rgba(255, 255, 255, 0.12);
+      }
+
       .route-option-card.is-fusing {
-        opacity: 0.38;
-        filter: blur(1.5px) saturate(0.8);
+        opacity: 0.52;
+        filter: saturate(0.82);
+        z-index: 1;
+      }
+
+      .route-option-card.is-collapsed {
+        opacity: 0.08;
+        filter: blur(0.8px) saturate(0.6);
         z-index: 1;
       }
     </style>
@@ -266,10 +280,12 @@
 
       const API_BASE = `${window.location.origin}/api/routes`;
       const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
-      const OPTION_FUSE_MS = 760;
+      const OPTION_FUSE_MS = 520;
+      const OPTION_EXPAND_MS = 280;
       let routes = [];
       let routeOptions = [];
       let selectingOptionId = null;
+      let selectionPhase = null;
 
       const linePalette = {
         TWL: { glow: "rgba(34,197,94,0.35)", border: "rgba(34,197,94,0.7)" },
@@ -358,10 +374,16 @@
             const theme = getLineTheme(firstLine, false);
             const isSelected = option.id === selectingOptionId;
             const isFusing = selectingOptionId && !isSelected;
+            const isExpanding = isSelected && selectionPhase === "expanding";
+            const isCollapsed = isFusing && selectionPhase === "expanding";
             const offset = selectedIndex === -1 ? 0 : selectedIndex - index;
-            const fuseTransform = isFusing
-              ? `transform: translateY(${offset * 46}px) scale(${Math.max(0.88, 1 - Math.abs(offset) * 0.04)});`
-              : "";
+            const baseOffsetY = offset * 44;
+            const baseOffsetX = offset * 8;
+            const fuseTransform = isCollapsed
+              ? `transform: translate(${baseOffsetX}px, ${baseOffsetY + 20}px) scale(${Math.max(0.7, 1 - Math.abs(offset) * 0.08)});`
+              : isFusing
+                ? `transform: translate(${baseOffsetX}px, ${baseOffsetY}px) scale(${Math.max(0.9, 1 - Math.abs(offset) * 0.04)});`
+                : "";
             const complexityLabel =
               index === 0
                 ? "Fastest"
@@ -370,7 +392,7 @@
                   : `Option ${option.rank}`;
 
             return `
-          <div class="route-option-card ${isSelected ? "is-selected" : ""} ${isFusing ? "is-fusing" : ""} w-full max-w-3xl bg-neutral-950 border rounded-2xl p-6 flex flex-col gap-4 relative" style="border-color:${theme.border}; box-shadow: 0 0 28px ${theme.glow}; ${fuseTransform}; transition-delay:${isFusing ? Math.min(180, Math.abs(offset) * 70) : 0}ms;">
+          <div class="route-option-card ${isSelected ? "is-selected" : ""} ${isExpanding ? "is-expanding" : ""} ${isFusing ? "is-fusing" : ""} ${isCollapsed ? "is-collapsed" : ""} w-full max-w-3xl bg-neutral-950 border rounded-2xl p-6 flex flex-col gap-4 relative" style="border-color:${theme.border}; box-shadow: 0 0 28px ${theme.glow}; ${fuseTransform}; transition-delay:${isFusing ? Math.min(180, Math.abs(offset) * 60) : 0}ms;">
              <div class="flex flex-col gap-3 md:flex-row md:justify-between md:items-start">
                 <div class="flex flex-col gap-2">
                    <div class="flex items-center gap-2 flex-wrap">
@@ -382,7 +404,7 @@
                 </div>
                 <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">Choose Route</button>
              </div>
-             ${isSelected ? `<div class="text-[11px] uppercase tracking-[0.28em] text-neutral-400">Locking in selected route</div>` : ""}
+              ${isSelected ? `<div class="text-[11px] uppercase tracking-[0.28em] ${isExpanding ? "text-white" : "text-neutral-400"}">${isExpanding ? "Route locked" : "Locking in selected route"}</div>` : ""}
              <div class="flex flex-wrap gap-2">${renderLineChips(option.summary)}</div>
              <div class="text-sm text-neutral-400">${option.summary.lineSegments.map((segment) => `${mtrStations[segment.from]} -> ${mtrStations[segment.to]}`).join(" • ")}</div>
           </div>
@@ -410,6 +432,11 @@
         };
       }
 
+      function resetOptionSelectionState() {
+        selectingOptionId = null;
+        selectionPhase = null;
+      }
+
       document
         .getElementById("add-form")
         .addEventListener("submit", async (e) => {
@@ -429,12 +456,12 @@
           if (!res.ok) {
             const payload = await res.json().catch(() => ({}));
             routeOptions = [];
-            selectingOptionId = null;
+            resetOptionSelectionState();
             renderUI();
             return alert(payload.error || "No valid routes available.");
           }
           routeOptions = await res.json();
-          selectingOptionId = null;
+          resetOptionSelectionState();
           document.getElementById("start-search").value = "";
           document.getElementById("end-search").value = "";
           document.getElementById("start-code").value = "";
@@ -447,10 +474,9 @@
         if (!option || selectingOptionId) return;
 
         selectingOptionId = optionId;
+        selectionPhase = "fusing";
         renderUI();
-        await new Promise((resolve) => setTimeout(resolve, OPTION_FUSE_MS));
-
-        const res = await fetch(API_BASE, {
+        const request = fetch(API_BASE, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -461,9 +487,16 @@
           }),
         });
 
+        await new Promise((resolve) => setTimeout(resolve, OPTION_FUSE_MS));
+        selectionPhase = "expanding";
+        renderUI();
+        await new Promise((resolve) => setTimeout(resolve, OPTION_EXPAND_MS));
+
+        const res = await request;
+
         if (!res.ok) {
           const payload = await res.json().catch(() => ({}));
-          selectingOptionId = null;
+          resetOptionSelectionState();
           renderUI();
           return alert(payload.error || "Could not activate the selected route.");
         }
@@ -471,7 +504,7 @@
         const createdRoute = await res.json();
         routes = [createdRoute, ...routes.filter((route) => route.id !== createdRoute.id)];
         routeOptions = [];
-        selectingOptionId = null;
+        resetOptionSelectionState();
         renderUI();
       };
 
