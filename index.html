@@ -246,6 +246,7 @@
       const API_BASE = `${window.location.origin}/api/routes`;
       const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
       let routes = [];
+      let routeOptions = [];
 
       const linePalette = {
         TWL: { glow: "rgba(34,197,94,0.35)", border: "rgba(34,197,94,0.7)" },
@@ -297,6 +298,65 @@
         return null;
       }
 
+      function formatOptionMeta(summary) {
+        const parts = [`${formatRouteTime(summary.estimatedMinutes)} total`];
+
+        if (summary.transferCount === 0) {
+          parts.push("Direct");
+        } else if (summary.transferCount === 1) {
+          parts.push("1 transfer");
+        } else {
+          parts.push(`${summary.transferCount} transfers`);
+        }
+
+        parts.push(`${summary.stopCount} stops`);
+        return parts.join(" • ");
+      }
+
+      function renderLineChips(summary) {
+        return summary.lineSegments
+          .map((segment) => {
+            const theme = getLineTheme(segment.line, false);
+            return `<span class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white" style="background:${theme.border};">${lineNames[segment.line] || segment.line}</span>`;
+          })
+          .join("");
+      }
+
+      function renderRouteOptions() {
+        if (!routeOptions.length) return "";
+
+        return routeOptions
+          .map((option, index) => {
+            const firstLine = option.summary.lineSegments[0]?.line;
+            const theme = getLineTheme(firstLine, false);
+            const complexityLabel =
+              index === 0
+                ? "Fastest"
+                : index === 1
+                  ? "Alternative"
+                  : `Option ${option.rank}`;
+
+            return `
+          <div class="w-full max-w-3xl bg-neutral-950 border rounded-2xl p-6 flex flex-col gap-4 relative" style="border-color:${theme.border}; box-shadow: 0 0 28px ${theme.glow};">
+             <div class="flex flex-col gap-3 md:flex-row md:justify-between md:items-start">
+                <div class="flex flex-col gap-2">
+                   <div class="flex items-center gap-2 flex-wrap">
+                      <span class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white" style="background:${theme.border};">${complexityLabel}</span>
+                      <span class="text-[10px] font-bold uppercase px-2 py-1 rounded bg-neutral-800 text-neutral-200">Rank ${option.rank}</span>
+                   </div>
+                   <div class="text-xl font-black">${mtrStations[option.startCode]} to ${mtrStations[option.endCode]}</div>
+                   <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-400">${formatOptionMeta(option.summary)}</div>
+                </div>
+                <button onclick="chooseRouteOption('${option.id}')" class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0">Choose Route</button>
+             </div>
+             <div class="flex flex-wrap gap-2">${renderLineChips(option.summary)}</div>
+             <div class="text-sm text-neutral-400">${option.summary.lineSegments.map((segment) => `${mtrStations[segment.from]} -> ${mtrStations[segment.to]}`).join(" • ")}</div>
+          </div>
+        `;
+          })
+          .join("");
+      }
+
       async function init() {
         try {
           const res = await fetch(API_BASE);
@@ -322,18 +382,51 @@
           const endCode = document.getElementById("end-code").value;
           if (!startCode || !endCode)
             return alert("Select valid MTR stations.");
-          await fetch(API_BASE, {
+          const res = await fetch(`${API_BASE}/options`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              name: `${mtrStations[startCode]} ➡️ ${mtrStations[endCode]}`,
               startCode,
               endCode,
             }),
           });
+          if (!res.ok) {
+            const payload = await res.json().catch(() => ({}));
+            routeOptions = [];
+            renderUI();
+            return alert(payload.error || "No valid routes available.");
+          }
+          routeOptions = await res.json();
           document.getElementById("start-search").value = "";
           document.getElementById("end-search").value = "";
+          document.getElementById("start-code").value = "";
+          document.getElementById("end-code").value = "";
+          renderUI();
         });
+
+      window.chooseRouteOption = async (optionId) => {
+        const option = routeOptions.find((item) => item.id === optionId);
+        if (!option) return;
+
+        const res = await fetch(API_BASE, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            optionId: option.id,
+            startCode: option.startCode,
+            endCode: option.endCode,
+            name: `${mtrStations[option.startCode]} -> ${mtrStations[option.endCode]}`,
+          }),
+        });
+
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          return alert(payload.error || "Could not activate the selected route.");
+        }
+
+        routeOptions = [];
+        renderUI();
+      };
 
       window.advanceRoute = async (id) => {
         await fetch(`${API_BASE}/${id}/advance`, { method: "POST" });
@@ -409,7 +502,8 @@
       }
 
       function renderUI() {
-        document.getElementById("cards-layer").innerHTML = routes
+        const optionCards = renderRouteOptions();
+        const routeCards = routes
           .map((item) => {
             if (item.status === "COMPLETED") return "";
 
@@ -503,6 +597,8 @@
         `;
           })
           .join("");
+
+        document.getElementById("cards-layer").innerHTML = `${optionCards}${routeCards}`;
         lucide.createIcons();
       }
 

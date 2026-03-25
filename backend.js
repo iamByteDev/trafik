@@ -31,6 +31,7 @@ function createSessionData(sessionId) {
   return {
     sessionId,
     routes: [],
+    pendingRouteOptions: [],
     sockets: new Set(),
     updatedAt: Date.now(),
   };
@@ -180,8 +181,124 @@ Object.entries(lineSequences).forEach(([line, stations]) => {
 
 function getDirection(line, from, to) {
   const seq = lineSequences[line];
-  if (!seq) return "UP";
-  return seq.indexOf(to) > seq.indexOf(from) ? "UP" : "DOWN";
+  if (!seq) return null;
+
+  const fromIndex = seq.indexOf(from);
+  const toIndex = seq.indexOf(to);
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+    return null;
+  }
+
+  return toIndex > fromIndex ? "UP" : "DOWN";
+}
+
+function getStationIndex(line, station) {
+  return (lineSequences[line] || []).indexOf(station);
+}
+
+function lineHasStation(line, station) {
+  return getStationIndex(line, station) !== -1;
+}
+
+function isAdjacentOnLine(line, from, to) {
+  const fromIndex = getStationIndex(line, from);
+  const toIndex = getStationIndex(line, to);
+  return fromIndex !== -1 && toIndex !== -1 && Math.abs(fromIndex - toIndex) === 1;
+}
+
+function segmentMatchesLine(line, edges) {
+  if (!edges.length) return false;
+  return edges.every((edge) => isAdjacentOnLine(line, edge.from, edge.to));
+}
+
+function resolveServiceLineForSegment(edges) {
+  if (!edges.length) return null;
+
+  const officialLine = getOfficialLine(edges[0].line);
+  const candidates = lineVariantsByOfficialLine[officialLine] || [edges[0].line];
+  const matchingCandidates = candidates.filter((line) => segmentMatchesLine(line, edges));
+
+  if (matchingCandidates.length === 0) {
+    return null;
+  }
+
+  const lastEdgeLine = edges[edges.length - 1].line;
+  if (matchingCandidates.includes(lastEdgeLine)) {
+    return lastEdgeLine;
+  }
+
+  return matchingCandidates[0];
+}
+
+function validatePath(path) {
+  if (!Array.isArray(path) || path.length === 0) {
+    return { valid: false, reason: "Empty path" };
+  }
+
+  for (let i = 0; i < path.length; i++) {
+    const edge = path[i];
+    if (!edge?.line || !isAdjacentOnLine(edge.line, edge.from, edge.to)) {
+      return {
+        valid: false,
+        reason: "Path contains non-adjacent station hop",
+        edge,
+      };
+    }
+
+    if (i > 0 && path[i - 1].to !== edge.from) {
+      return {
+        valid: false,
+        reason: "Path is not continuous",
+        edge,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+function validateLegs(legs) {
+  if (!Array.isArray(legs) || legs.length === 0) {
+    return { valid: false, reason: "Itinerary is empty" };
+  }
+
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i];
+
+    if (leg.type === "WAITING") {
+      if (!lineHasStation(leg.line, leg.station) || !lineHasStation(leg.line, leg.destinationStation)) {
+        return { valid: false, reason: "Waiting leg uses station not served by line", leg };
+      }
+
+      if (!getDirection(leg.line, leg.station, leg.destinationStation)) {
+        return { valid: false, reason: "Waiting leg has invalid direction", leg };
+      }
+    }
+
+    if (leg.type === "COMMUTING") {
+      if (!lineHasStation(leg.line, leg.start) || !lineHasStation(leg.line, leg.end)) {
+        return { valid: false, reason: "Commuting leg uses station not served by line", leg };
+      }
+
+      if (!getDirection(leg.line, leg.start, leg.end)) {
+        return { valid: false, reason: "Commuting leg has invalid direction", leg };
+      }
+    }
+
+    if (leg.type === "TRANSFERRING") {
+      const previousLeg = legs[i - 1];
+      const nextLeg = legs[i + 1];
+      if (!previousLeg || !nextLeg) {
+        return { valid: false, reason: "Transfer leg is not between ride segments", leg };
+      }
+
+      if (!lineHasStation(previousLeg.line, leg.station) || !lineHasStation(nextLeg.line, leg.station)) {
+        return { valid: false, reason: "Transfer station does not connect both lines", leg };
+      }
+    }
+  }
+
+  return { valid: true };
 }
 
 function getOfficialLine(line) {
@@ -282,8 +399,148 @@ function findShortestPath(start, end) {
   return path;
 }
 
-function generateItinerary(start, end) {
-  const path = findShortestPath(start, end);
+function countTransfersForPath(path) {
+  if (path.length <= 1) return 0;
+
+  let transfers = 0;
+  for (let i = 1; i < path.length; i++) {
+    if (getOfficialLine(path[i - 1].line) !== getOfficialLine(path[i].line)) {
+      transfers++;
+    }
+  }
+  return transfers;
+}
+
+function buildPathSignature(path) {
+  return path.map((edge) => `${edge.from}:${edge.to}:${edge.line}`).join(">");
+}
+
+function getStepCost(currentLine, nextLine, edgeWeight) {
+  const transferPenalty =
+    currentLine && getOfficialLine(currentLine) !== getOfficialLine(nextLine) ? 5 : 0;
+
+  return edgeWeight + transferPenalty + (lineTraversalBias[nextLine] || 0);
+}
+
+function buildHeuristicDistances(end) {
+  const distances = new Map([[end, 0]]);
+  const queue = new Set([end]);
+
+  while (queue.size > 0) {
+    let currentNode = null;
+    let currentDistance = Infinity;
+
+    for (const node of queue) {
+      const distance = distances.get(node) ?? Infinity;
+      if (distance < currentDistance) {
+        currentDistance = distance;
+        currentNode = node;
+      }
+    }
+
+    if (!currentNode) break;
+    queue.delete(currentNode);
+
+    for (const neighbor of graph[currentNode] || []) {
+      const stepCost = neighbor.weight + (lineTraversalBias[neighbor.line] || 0);
+      const nextDistance = currentDistance + stepCost;
+
+      if (nextDistance < (distances.get(neighbor.node) ?? Infinity)) {
+        distances.set(neighbor.node, nextDistance);
+        queue.add(neighbor.node);
+      }
+    }
+  }
+
+  return distances;
+}
+
+function findRouteOptions(start, end, limit = 5) {
+  const heuristic = buildHeuristicDistances(end);
+  const queue = [
+    {
+      node: start,
+      currentLine: null,
+      cost: 0,
+      priority: heuristic.get(start) ?? 0,
+      edges: [],
+      visitedNodes: new Set([start]),
+    },
+  ];
+  const completed = [];
+  const seenSignatures = new Set();
+  const bestCostByState = new Map();
+  const maxCandidates = Math.max(limit * 6, 12);
+  const maxExplorations = 20000;
+  let explored = 0;
+
+  while (queue.length > 0 && completed.length < maxCandidates && explored < maxExplorations) {
+    queue.sort((a, b) => a.priority - b.priority || a.cost - b.cost || a.edges.length - b.edges.length);
+    const state = queue.shift();
+    explored++;
+
+    if (state.node === end && state.edges.length > 0) {
+      const signature = buildPathSignature(state.edges);
+      if (!seenSignatures.has(signature)) {
+        seenSignatures.add(signature);
+        completed.push({
+          path: state.edges,
+          score: state.cost,
+          transfers: countTransfersForPath(state.edges),
+          stops: state.edges.length,
+        });
+      }
+      continue;
+    }
+
+    const pruneKey = `${state.node}|${state.currentLine || "START"}|${Array.from(state.visitedNodes).sort().join(",")}`;
+    if ((bestCostByState.get(pruneKey) ?? Infinity) < state.cost) {
+      continue;
+    }
+
+    for (const neighbor of graph[state.node] || []) {
+      if (state.visitedNodes.has(neighbor.node)) continue;
+      const nextCost = state.cost + getStepCost(state.currentLine, neighbor.line, neighbor.weight);
+
+      const nextVisited = new Set(state.visitedNodes);
+      nextVisited.add(neighbor.node);
+
+      const stateKey = `${neighbor.node}|${neighbor.line}|${Array.from(nextVisited).sort().join(",")}`;
+      if (nextCost >= (bestCostByState.get(stateKey) ?? Infinity)) {
+        continue;
+      }
+      bestCostByState.set(stateKey, nextCost);
+
+      queue.push({
+        node: neighbor.node,
+        currentLine: neighbor.line,
+        cost: nextCost,
+        priority: nextCost + (heuristic.get(neighbor.node) ?? 0),
+        edges: [
+          ...state.edges,
+          {
+            from: state.node,
+            to: neighbor.node,
+            line: neighbor.line,
+            weight: neighbor.weight,
+          },
+        ],
+        visitedNodes: nextVisited,
+      });
+    }
+  }
+
+  return completed
+    .sort((a, b) => a.score - b.score || a.transfers - b.transfers || a.stops - b.stops)
+    .slice(0, limit);
+}
+
+function generateItineraryFromPath(path) {
+  const pathValidation = validatePath(path);
+  if (!pathValidation.valid) {
+    return [];
+  }
+
   if (path.length === 0) return [];
 
   const legs = [];
@@ -306,13 +563,21 @@ function generateItinerary(start, end) {
 
     const firstEdge = path[segmentStart];
     const lastEdge = path[segmentEnd - 1];
-    const rideLine = lastEdge.line;
+    const segmentEdges = path.slice(segmentStart, segmentEnd);
+    const rideLine = resolveServiceLineForSegment(segmentEdges);
+    const direction = rideLine
+      ? getDirection(rideLine, firstEdge.from, firstEdge.to)
+      : null;
+
+    if (!rideLine || !direction) {
+      return [];
+    }
 
     legs.push({
       type: "WAITING",
       line: rideLine,
       station: firstEdge.from,
-      direction: getDirection(rideLine, firstEdge.from, firstEdge.to),
+      direction,
       destinationStation: lastEdge.to,
       targetTime: null,
     });
@@ -336,7 +601,75 @@ function generateItinerary(start, end) {
     segmentStart = segmentEnd;
   }
 
-  return legs;
+  const legValidation = validateLegs(legs);
+  return legValidation.valid ? legs : [];
+}
+
+function generateItinerary(start, end) {
+  const path = findShortestPath(start, end);
+  return generateItineraryFromPath(path);
+}
+
+function summarizeLegs(legs) {
+  const lineSegments = [];
+
+  for (const leg of legs) {
+    if (leg.type !== "COMMUTING") continue;
+    lineSegments.push({
+      line: leg.line,
+      from: leg.start,
+      to: leg.end,
+    });
+  }
+
+  const estimatedMinutes = legs.reduce((total, leg) => total + (leg.duration || 0), 0);
+  const transferCount = legs.filter((leg) => leg.type === "TRANSFERRING").length;
+
+  return {
+    estimatedMinutes,
+    transferCount,
+    stopCount: lineSegments.reduce((total, segment) => {
+      const sequence = lineSequences[segment.line] || [];
+      const fromIndex = sequence.indexOf(segment.from);
+      const toIndex = sequence.indexOf(segment.to);
+      if (fromIndex === -1 || toIndex === -1) return total;
+      return total + Math.abs(toIndex - fromIndex);
+    }, 0),
+    lineSegments,
+  };
+}
+
+function buildLegSummarySignature(legs) {
+  return legs
+    .filter((leg) => leg.type === "COMMUTING")
+    .map((leg) => `${getOfficialLine(leg.line)}:${leg.start}:${leg.end}`)
+    .join("|");
+}
+
+function buildRouteOption(startCode, endCode, rank, path) {
+  const pathValidation = validatePath(path);
+  if (!pathValidation.valid) {
+    return null;
+  }
+
+  const legs = generateItineraryFromPath(path);
+  if (legs.length === 0) {
+    return null;
+  }
+
+  const summary = summarizeLegs(legs);
+
+  return {
+    id: `OPT-${crypto.randomUUID()}`,
+    rank,
+    startCode,
+    endCode,
+    score: Number(
+      (path.reduce((total, edge) => total + edge.weight, 0) + summary.transferCount * 5).toFixed(2),
+    ),
+    legs,
+    summary,
+  };
 }
 
 // ==========================================
@@ -774,11 +1107,29 @@ wss.on("connection", (socket, req) => {
 });
 
 app.post("/api/routes", async (req, res) => {
-  const { name, startCode, endCode } = req.body;
+  const { name, startCode, endCode, optionId } = req.body;
   if (!graph[startCode] || !graph[endCode])
     return res.status(400).json({ error: "Station not in core map." });
 
-  const legs = generateItinerary(startCode, endCode);
+  let legs = [];
+
+  if (optionId) {
+    const selectedOption = req.session.pendingRouteOptions.find(
+      (option) => option.id === optionId && option.startCode === startCode && option.endCode === endCode,
+    );
+
+    if (!selectedOption) {
+      return res.status(400).json({ error: "Selected route option is no longer available." });
+    }
+
+    legs = selectedOption.legs.map((leg) => ({ ...leg }));
+  } else {
+    legs = generateItinerary(startCode, endCode);
+  }
+
+  if (!legs.length) {
+    return res.status(400).json({ error: "No valid route could be built for this journey." });
+  }
 
   if (legs[0] && legs[0].type === "WAITING") {
     const etaResult = await fetchExactETA(
@@ -801,14 +1152,48 @@ app.post("/api/routes", async (req, res) => {
 
   const newRoute = {
     id: `R-${crypto.randomUUID()}`,
-    name,
+    name: name || `${startCode} -> ${endCode}`,
     legs,
     currentLegIndex: 0,
     status: "ACTIVE",
   };
+  req.session.pendingRouteOptions = [];
   req.session.routes.push(newRoute);
   broadcastToSession(req.sessionId, "new_route", newRoute);
   res.status(201).json(newRoute);
+});
+
+app.post("/api/routes/options", (req, res) => {
+  const { startCode, endCode } = req.body;
+  if (!graph[startCode] || !graph[endCode]) {
+    return res.status(400).json({ error: "Station not in core map." });
+  }
+
+  const seenOptionSignatures = new Set();
+  const routeOptions = findRouteOptions(startCode, endCode, 12)
+    .map((option) => buildRouteOption(startCode, endCode, 0, option.path))
+    .filter((option) => {
+      if (!option) return false;
+      const signature = buildLegSummarySignature(option.legs);
+      if (seenOptionSignatures.has(signature)) {
+        return false;
+      }
+      seenOptionSignatures.add(signature);
+      return true;
+    })
+    .slice(0, 5)
+    .map((option, index) => ({
+      ...option,
+      rank: index + 1,
+    }));
+
+  if (!routeOptions.length) {
+    return res.status(404).json({ error: "No valid route options available." });
+  }
+
+  req.session.pendingRouteOptions = routeOptions;
+  req.session.updatedAt = Date.now();
+  res.json(routeOptions);
 });
 
 app.post("/api/routes/:id/advance", async (req, res) => {
