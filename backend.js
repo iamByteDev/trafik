@@ -646,6 +646,64 @@ function buildLegSummarySignature(legs) {
     .join("|");
 }
 
+function isReasonableAlternative(option, bestOption) {
+  if (!bestOption) return true;
+
+  const extraMinutes = option.summary.estimatedMinutes - bestOption.summary.estimatedMinutes;
+  const extraTransfers = option.summary.transferCount - bestOption.summary.transferCount;
+  const extraSegments = option.summary.lineSegments.length - bestOption.summary.lineSegments.length;
+
+  if (extraMinutes > 12) return false;
+  if (extraTransfers > 2) return false;
+  if (option.summary.transferCount > 3) return false;
+  if (extraSegments > 2) return false;
+  if (option.score - bestOption.score > 12) return false;
+
+  return true;
+}
+
+function buildRouteLabels(options) {
+  if (!options.length) return [];
+
+  const fastestMinutes = Math.min(...options.map((option) => option.summary.estimatedMinutes));
+  const fewestTransfers = Math.min(...options.map((option) => option.summary.transferCount));
+  const fewestStops = Math.min(...options.map((option) => option.summary.stopCount));
+
+  return options.map((option, index) => {
+    const labels = [];
+
+    if (option.summary.transferCount === 0) {
+      labels.push("Direct");
+    }
+
+    if (option.summary.estimatedMinutes === fastestMinutes) {
+      labels.push(index === 0 ? "Fastest" : "Matches fastest time");
+    }
+
+    if (option.summary.transferCount === fewestTransfers) {
+      labels.push(fewestTransfers === 0 ? "No changes" : "Fewest transfers");
+    }
+
+    if (option.summary.stopCount === fewestStops) {
+      labels.push("Fewest stops");
+    }
+
+    if (labels.length === 0 && index === 0) {
+      labels.push("Best overall");
+    }
+
+    if (labels.length === 0) {
+      labels.push("Viable alternative");
+    }
+
+    return {
+      ...option,
+      labels,
+      primaryLabel: labels[0],
+    };
+  });
+}
+
 function buildRouteOption(startCode, endCode, rank, path) {
   const pathValidation = validatePath(path);
   if (!pathValidation.valid) {
@@ -1170,7 +1228,7 @@ app.post("/api/routes/options", (req, res) => {
   }
 
   const seenOptionSignatures = new Set();
-  const routeOptions = findRouteOptions(startCode, endCode, 12)
+  const candidateOptions = findRouteOptions(startCode, endCode, 12)
     .map((option) => buildRouteOption(startCode, endCode, 0, option.path))
     .filter((option) => {
       if (!option) return false;
@@ -1180,12 +1238,18 @@ app.post("/api/routes/options", (req, res) => {
       }
       seenOptionSignatures.add(signature);
       return true;
-    })
+    });
+
+  const bestOption = candidateOptions[0] || null;
+  const routeOptions = buildRouteLabels(
+    candidateOptions
+    .filter((option) => isReasonableAlternative(option, bestOption))
     .slice(0, 5)
     .map((option, index) => ({
       ...option,
       rank: index + 1,
-    }));
+    })),
+  );
 
   if (!routeOptions.length) {
     return res.status(404).json({ error: "No valid route options available." });

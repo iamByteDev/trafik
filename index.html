@@ -332,6 +332,18 @@
           .join("");
       }
 
+      function renderTruthLabels(option, theme) {
+        const labels = Array.isArray(option.labels) ? option.labels : [];
+        if (!labels.length) return "";
+
+        return labels
+          .map((label, index) => {
+            const isPrimary = label === option.primaryLabel || index === 0;
+            return `<span class="text-[10px] font-bold uppercase px-2 py-1 rounded ${isPrimary ? "text-white" : "text-neutral-200 bg-neutral-800"}" ${isPrimary ? `style="background:${theme.border};"` : ""}>${label}</span>`;
+          })
+          .join("");
+      }
+
       function renderRouteOptions() {
         if (!routeOptions.length) return "";
 
@@ -340,25 +352,22 @@
             const firstLine = option.summary.lineSegments[0]?.line;
             const theme = getLineTheme(firstLine, false);
             const complexityLabel =
-              index === 0
-                ? "Fastest"
-                : index === 1
-                  ? "Alternative"
-                  : `Option ${option.rank}`;
+              option.primaryLabel || `Option ${option.rank}`;
 
             return `
           <div data-option-id="${option.id}" class="route-option-card w-full max-w-3xl bg-neutral-950 border rounded-2xl p-6 flex flex-col gap-4 relative" style="border-color:${theme.border}; box-shadow: 0 0 28px ${theme.glow};">
              <div class="flex flex-col gap-3 md:flex-row md:justify-between md:items-start">
                 <div class="flex flex-col gap-2">
                    <div class="flex items-center gap-2 flex-wrap">
-                        <span class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white" style="background:${theme.border};">${complexityLabel}</span>
+                         <span class="text-[10px] font-bold uppercase px-2 py-1 rounded text-white" style="background:${theme.border};">${complexityLabel}</span>
                       ${routeOptions.length > 1 ? `<span class="text-[10px] font-bold uppercase px-2 py-1 rounded bg-neutral-800 text-neutral-200">Rank ${option.rank}</span>` : ""}
-                   </div>
-                   <div class="text-xl font-black">${mtrStations[option.startCode]} to ${mtrStations[option.endCode]}</div>
-                   <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-400">${formatOptionMeta(option.summary)}</div>
-                </div>
-                <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">Choose Route</button>
-             </div>
+                    </div>
+                    <div class="text-xl font-black">${mtrStations[option.startCode]} to ${mtrStations[option.endCode]}</div>
+                    <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-400">${formatOptionMeta(option.summary)}</div>
+                 </div>
+                 <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">Choose Route</button>
+              </div>
+              <div class="flex flex-wrap gap-2">${renderTruthLabels(option, theme)}</div>
               <div class="flex flex-wrap gap-2">${renderLineChips(option.summary)}</div>
               <div class="text-sm text-neutral-400">${option.summary.lineSegments.map((segment) => `${mtrStations[segment.from]} -> ${mtrStations[segment.to]}`).join(" • ")}</div>
            </div>
@@ -368,11 +377,7 @@
       }
 
       async function init() {
-        try {
-          const res = await fetch(API_BASE);
-          routes = await res.json();
-          renderUI();
-        } catch (err) {}
+        await syncRoutes();
         const ws = new WebSocket(WS_URL);
         ws.onmessage = (event) => {
           const { type, data } = JSON.parse(event.data);
@@ -384,6 +389,25 @@
 
           applySocketEvent(type, data);
         };
+
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "visible") {
+            syncRoutes();
+          }
+        });
+
+        window.addEventListener("focus", () => {
+          syncRoutes();
+        });
+      }
+
+      async function syncRoutes() {
+        try {
+          const res = await fetch(API_BASE);
+          if (!res.ok) return;
+          routes = await res.json();
+          renderUI();
+        } catch (err) {}
       }
 
       function applySocketEvent(type, data) {
@@ -597,10 +621,19 @@
       };
 
       window.advanceRoute = async (id) => {
-        await fetch(`${API_BASE}/${id}/advance`, { method: "POST" });
+        const res = await fetch(`${API_BASE}/${id}/advance`, { method: "POST" });
+        if (!res.ok) return;
+
+        const updatedRoute = await res.json();
+        routes = routes.map((route) => (route.id === id ? updatedRoute : route));
+        renderUI();
       };
       window.deleteRoute = async (id) => {
-        await fetch(`${API_BASE}/${id}`, { method: "DELETE" });
+        const res = await fetch(`${API_BASE}/${id}`, { method: "DELETE" });
+        if (!res.ok) return;
+
+        routes = routes.filter((route) => route.id !== id);
+        renderUI();
       };
 
       function formatRouteTime(totalMinutes) {
