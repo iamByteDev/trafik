@@ -344,6 +344,19 @@
           .join("");
       }
 
+      function removeRouteOption(optionId) {
+        if (selectingOptionId) return;
+
+        routeOptions = routeOptions
+          .filter((option) => option.id !== optionId)
+          .map((option, index) => ({
+            ...option,
+            rank: index + 1,
+          }));
+
+        renderUI();
+      }
+
       function renderRouteOptions() {
         if (!routeOptions.length) return "";
 
@@ -365,7 +378,10 @@
                     <div class="text-xl font-black">${mtrStations[option.startCode]} to ${mtrStations[option.endCode]}</div>
                     <div class="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-400">${formatOptionMeta(option.summary)}</div>
                  </div>
-                 <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">Choose Route</button>
+                 <div class="flex items-center gap-2 shrink-0">
+                   <button onclick="removeRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="border border-neutral-700 text-neutral-300 px-3 py-2 rounded-lg hover:border-red-500 hover:text-red-400 font-bold uppercase text-xs disabled:opacity-50 disabled:cursor-not-allowed">Delete</button>
+                   <button onclick="chooseRouteOption('${option.id}')" ${selectingOptionId ? "disabled" : ""} class="bg-white text-black px-4 py-2 rounded-lg hover:bg-neutral-300 font-bold uppercase text-sm disabled:opacity-50 disabled:cursor-not-allowed">Choose Route</button>
+                 </div>
               </div>
               <div class="flex flex-wrap gap-2">${renderTruthLabels(option, theme)}</div>
               <div class="flex flex-wrap gap-2">${renderLineChips(option.summary)}</div>
@@ -519,9 +535,9 @@
             card.style.transform = "translate3d(0, -4px, 0) scale(1.01)";
             card.style.opacity = "1";
             card.style.filter = "none";
-          card.style.zIndex = "100000";
-          return;
-        }
+            card.style.zIndex = "100000";
+            return;
+          }
 
           card.style.transform = "translate3d(0, 0, 0) scale(0.7)";
           card.style.opacity = "0";
@@ -529,7 +545,7 @@
           card.style.pointerEvents = "none";
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 850));
+        await new Promise((resolve) => setTimeout(resolve, 500));
 
         await selected
           .animate(
@@ -537,21 +553,29 @@
               {
                 transform: "translate3d(0, -4px, 0) scale(1.01)",
                 opacity: 1,
+                offset: 0,
               },
               {
-                transform: "translate3d(0, -18px, 0) scale(1.08)",
+                transform: "translate3d(0, -20px, 0) scale(1.09)",
                 opacity: 1,
+                offset: 0.38,
+              },
+              {
+                transform: "translate3d(0, -10px, 0) scale(0.08)",
+                opacity: 0,
+                offset: 1,
               },
             ],
             {
-              duration: 380,
-              easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+              duration: 400,
+              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
               fill: "forwards",
             },
           )
           .finished;
 
-        selected.style.transform = "translate3d(0, -18px, 0) scale(1.08)";
+        selected.style.transform = "translate3d(0, -10px, 0) scale(0.08)";
+        selected.style.opacity = "0";
       }
 
       document
