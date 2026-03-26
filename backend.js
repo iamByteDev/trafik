@@ -146,20 +146,60 @@ const lineVariantsByOfficialLine = Object.keys(lineSequences).reduce(
 // ==========================================
 const graph = {};
 const lineTravelMinutes = {
-  TWL: 2.6,
-  ISL: 2.5,
-  KTL: 2.6,
-  SIL: 3.1,
-  TML: 2.9,
-  TCL: 3.2,
-  AEL: 4,
-  DRL: 3.2,
+  TWL: 2.13,
+  ISL: 2.13,
+  KTL: 2.19,
+  SIL: 2.75,
+  TML: 2.81,
+  TCL: 4.14,
+  AEL: 6,
+  DRL: 5,
   EAL: 3,
   EAL_LMC: 3,
   EAL_RAC: 3,
-  TKL: 2.8,
-  TKL_LHP: 3,
+  TKL: 2.14,
+  TKL_LHP: 2.7,
 };
+
+const transferMinutesByStation = {
+  ADM: 4,
+  CEN: 4,
+  HUH: 4,
+  HOM: 4,
+  KOT: 4,
+  MEI: 4,
+  NAC: 4,
+  LAK: 3,
+  YMT: 3,
+  PRE: 3,
+  NOP: 3,
+  TIK: 3,
+  YAT: 3,
+  DIH: 3,
+  QUB: 3,
+  AUS: 3,
+  ETS: 3,
+  TAW: 3,
+};
+
+const segmentEntryExitMinutes = {
+  default: 0.85,
+  TML: 1,
+  EAL: 1,
+  EAL_LMC: 1,
+  EAL_RAC: 1,
+  AEL: 1.2,
+};
+
+function estimateCommuteLegMinutes(line, commuteTime, stopCount) {
+  const accessBuffer = segmentEntryExitMinutes[line] ?? segmentEntryExitMinutes.default;
+  const intermediateStopBuffer = Math.max(0, stopCount - 1) * 0.3;
+  return Math.max(3, Math.ceil(commuteTime + accessBuffer + intermediateStopBuffer));
+}
+
+function estimateTransferLegMinutes(station) {
+  return transferMinutesByStation[station] || 5;
+}
 
 function getEdgeTravelMinutes(line) {
   return lineTravelMinutes[line] || 2.8;
@@ -586,7 +626,7 @@ function generateItineraryFromPath(path) {
       line: rideLine,
       start: firstEdge.from,
       end: lastEdge.to,
-      duration: Math.max(3, Math.ceil(commuteTime + Math.max(1, stopCount * 0.5))),
+      duration: estimateCommuteLegMinutes(rideLine, commuteTime, stopCount),
     });
 
     if (segmentEnd < path.length) {
@@ -594,7 +634,7 @@ function generateItineraryFromPath(path) {
         type: "TRANSFERRING",
         station: lastEdge.to,
         toLine: path[segmentEnd].line,
-        duration: 5,
+        duration: estimateTransferLegMinutes(lastEdge.to),
       });
     }
 
