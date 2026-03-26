@@ -8,6 +8,7 @@
     <link rel="shortcut icon" href="/favicon.ico?v=4" type="image/x-icon" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/motion@12.37.0/dist/motion.js"></script>
     <style>
       ::-webkit-scrollbar {
         display: none;
@@ -95,6 +96,7 @@
     </main>
 
     <script>
+      const { animate, stagger } = Motion;
       const mtrStations = {
         KET: "Kennedy Town",
         HKU: "HKU",
@@ -344,8 +346,25 @@
           .join("");
       }
 
-      function removeRouteOption(optionId) {
+      async function removeRouteOption(optionId) {
         if (selectingOptionId) return;
+
+        const card = document.querySelector(`[data-option-id="${optionId}"]`);
+        if (card) {
+          await animate(
+            card,
+            {
+              opacity: [1, 0],
+              x: [0, 40],
+              scale: [1, 0.92],
+              filter: ["blur(0px)", "blur(1px)"],
+            },
+            {
+              duration: 0.28,
+              ease: [0.22, 1, 0.36, 1],
+            },
+          ).finished;
+        }
 
         routeOptions = routeOptions
           .filter((option) => option.id !== optionId)
@@ -453,129 +472,80 @@
       async function animateRouteOptionFusion(optionId) {
         const cards = Array.from(document.querySelectorAll("[data-option-id]"));
         const selected = cards.find((card) => card.dataset.optionId === optionId);
+        const others = cards.filter((card) => card !== selected);
 
         if (!selected || cards.length <= 1) {
-          await new Promise((resolve) => setTimeout(resolve, OPTION_FUSE_MS + 500));
+          if (selected) {
+            await animate(
+              selected,
+              {
+                scale: [1, 1.08, 0],
+                y: [0, -20, -8],
+                opacity: [1, 1, 0],
+              },
+              {
+                duration: 0.4,
+                ease: [0.22, 1, 0.36, 1],
+              },
+            ).finished;
+          }
           return;
         }
 
         const selectedRect = selected.getBoundingClientRect();
         const selectedCenterX = selectedRect.left + selectedRect.width / 2;
         const selectedCenterY = selectedRect.top + selectedRect.height / 2;
-        selected.style.position = "relative";
         selected.style.zIndex = "100000";
 
-        const animations = cards.map((card, index) => {
+        const otherAnimations = others.map((card) => {
           const rect = card.getBoundingClientRect();
           const centerX = rect.left + rect.width / 2;
           const centerY = rect.top + rect.height / 2;
-
-          if (card === selected) {
-            return card.animate(
-              [
-                {
-                  transform: "translate3d(0, 0, 0) scale(1)",
-                  opacity: 1,
-                  offset: 0,
-                },
-                {
-                  transform: "translate3d(0, -4px, 0) scale(1.01)",
-                  opacity: 1,
-                  offset: 1,
-                },
-              ],
-              {
-                duration: OPTION_FUSE_MS,
-                easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-                fill: "forwards",
-              },
-            ).finished;
-          }
-
           const deltaX = (selectedCenterX - centerX) * 0.94;
           const deltaY = (selectedCenterY - centerY) * 0.94;
-          const scale = Math.max(0.7, 0.9 - index * 0.03);
-          card.style.position = "relative";
-          card.style.zIndex = String(Math.max(1, 99990 - index));
 
-          return card.animate(
-            [
-              {
-                transform: "translate3d(0, 0, 0) scale(1)",
-                opacity: 1,
-                filter: "blur(0px)",
-                offset: 0,
-              },
-              {
-                transform: `translate3d(${deltaX * 0.72}px, ${deltaY * 0.72}px, 0) scale(${Math.min(0.92, scale + 0.08)})`,
-                opacity: 0.52,
-                filter: "blur(0.6px)",
-                offset: 0.62,
-              },
-              {
-                transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(${scale})`,
-                opacity: 0,
-                filter: "blur(1.4px)",
-                offset: 1,
-              },
-            ],
+          card.style.pointerEvents = "none";
+          card.style.zIndex = "10";
+
+          return animate(
+            card,
             {
-              duration: OPTION_FUSE_MS,
-              delay: Math.min(120, Math.abs(deltaY) * 0.12),
-              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-              fill: "forwards",
+              x: [0, deltaX * 0.78, deltaX],
+              y: [0, deltaY * 0.78, deltaY],
+              scale: [1, 0.92, 0.74],
+              opacity: [1, 0.42, 0],
+              filter: ["blur(0px)", "blur(0.8px)", "blur(1.6px)"],
+            },
+            {
+              duration: 0.55,
+              delay: stagger(0.04, { from: "center" })(others.indexOf(card), others.length),
+              ease: [0.22, 1, 0.36, 1],
             },
           ).finished;
         });
 
-        await Promise.allSettled(animations);
+        await Promise.allSettled(otherAnimations);
 
-        cards.forEach((card) => {
-          if (card === selected) {
-            card.style.transform = "translate3d(0, -4px, 0) scale(1.01)";
-            card.style.opacity = "1";
-            card.style.filter = "none";
-            card.style.zIndex = "100000";
-            return;
-          }
-
-          card.style.transform = "translate3d(0, 0, 0) scale(0.7)";
+        others.forEach((card) => {
           card.style.opacity = "0";
-          card.style.filter = "blur(1.4px)";
           card.style.pointerEvents = "none";
         });
 
         await new Promise((resolve) => setTimeout(resolve, 500));
 
-        await selected
-          .animate(
-            [
-              {
-                transform: "translate3d(0, -4px, 0) scale(1.01)",
-                opacity: 1,
-                offset: 0,
-              },
-              {
-                transform: "translate3d(0, -20px, 0) scale(1.09)",
-                opacity: 1,
-                offset: 0.38,
-              },
-              {
-                transform: "translate3d(0, -10px, 0) scale(0.08)",
-                opacity: 0,
-                offset: 1,
-              },
-            ],
-            {
-              duration: 400,
-              easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-              fill: "forwards",
-            },
-          )
-          .finished;
-
-        selected.style.transform = "translate3d(0, -10px, 0) scale(0.08)";
-        selected.style.opacity = "0";
+        await animate(
+          selected,
+          {
+            scale: [1, 1.1, 0],
+            y: [0, -20, -8],
+            opacity: [1, 1, 0],
+            filter: ["blur(0px)", "blur(0px)", "blur(1px)"],
+          },
+          {
+            duration: 0.4,
+            ease: [0.22, 1, 0.36, 1],
+          },
+        ).finished;
       }
 
       document
